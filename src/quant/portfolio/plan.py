@@ -26,6 +26,11 @@ def plan_hash(orders: list[dict[str, Any]], account_value_usd: float) -> str:
     return hashlib.sha256(json.dumps({"orders": orders, "account_value_usd": round(account_value_usd, 2)}, sort_keys=True).encode()).hexdigest()
 
 
+def plan_seal(plan: dict[str, Any]) -> str:
+    """SHA-256 of the whole plan as canonical JSON, recorded with the plan in the audit log (amendment A15): a later change to any field shows."""
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
 def make_plan(target: dict[str, float], held: dict[str, float], prices: dict[str, float], account_value_usd: float, tranche_fraction: float = 1.0) -> dict[str, Any]:
     """Orders that move `held` (ticker -> shares) a fraction of the way to `target` (ticker -> shares). Sells use negative quantity. Rules of SPEC section 4."""
     orders: list[dict[str, Any]] = []
@@ -50,7 +55,8 @@ def write_plan(plan: dict[str, Any]) -> Path:
     PLANS.mkdir(parents=True, exist_ok=True)
     f = PLANS / f"{plan['plan_hash']}.json"
     f.write_text(json.dumps(plan, indent=1) + "\n")
-    A.log("plan", plan_hash=plan["plan_hash"], file=str(f), orders=len(plan["orders"]), slot=plan.get("slot"), tranche=plan.get("tranche"), broker=plan.get("broker", ""))
+    A.log("plan", plan_hash=plan["plan_hash"], file=str(f), orders=len(plan["orders"]), slot=plan.get("slot"), tranche=plan.get("tranche"), broker=plan.get("broker", ""),
+          plan_sha256=plan_seal(json.loads(f.read_text())))
     return f
 
 
@@ -81,6 +87,8 @@ def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float
         raise ValueError(f"{target_csv} has no `line` column of Alpaca symbols: rebuild the target book (amendment A14)")
     col = "line"
     yahoo = dict(zip(b[col], b["ticker"], strict=True))
+    if odd := sorted(f"{s}->{y}" for s, y in yahoo.items() if str(s).replace(".", "-") != str(y).replace(".", "-")):
+        raise ValueError(f"target book maps Alpaca symbols to different Yahoo tickers (prices would come from another security): {odd[:10]}")
     px_y, px_date = latest_prices(sorted(set(b["ticker"])))
     prices = {t: px_y[y] for t, y in yahoo.items() if y in px_y}
     info = Path(target_csv).with_suffix(".json")

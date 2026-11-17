@@ -22,7 +22,7 @@ from quant.core.frozen import assert_frozen_intact
 from quant.models import definition as LC
 from quant.core.paths import REPO
 from quant.core.release import pointer as PT
-from quant.core.release import verify_release
+from quant.core.release import sha256_file, verify_release
 
 OUT = REPO / "lab/paper/scores"
 MAX_COVERAGE_DROP = 0.10
@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None, pointer: Path = PT.POINTER) -> None:
     if (OUT / f"{stem}.parquet").exists():
         raise SystemExit(f"refused: {OUT / stem}.parquet exists; stored scores are the record a book was built from: move the file aside to rescore {a.month[:7]}")
     pq, ptr = PT.current(pointer)
+    if sha256_file(pq) != ptr["sha256"]:
+        raise SystemExit(f"refused: {pq.name} does not match the sha256 recorded in the pointer when it was promoted")
     bad = unaccepted_gates(verify_release(pq.parent), ptr)
     if bad:
         raise SystemExit(f"refused: release gates failed and not accepted: {bad}")

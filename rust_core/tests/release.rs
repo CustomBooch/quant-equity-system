@@ -80,3 +80,12 @@ fn validation_is_required_only_when_asked_and_gates_must_all_pass() {
     let plain = verify_release(&example()).unwrap();
     assert!(require_validation(&plain).unwrap_err().contains("no validation block"));
 }
+
+#[test]
+fn a_nested_version_json_must_be_listed_only_the_root_manifest_is_exempt() {
+    let d = scratch("nested");
+    fs::write(d.join("data").join("VERSION.json"), "{}").unwrap();        // added after the release was written (amendment A15)
+    let err = verify_release(&d).unwrap_err();
+    assert!(err.contains("not listed") && err.contains("data/VERSION.json"), "{err}");
+    let _ = fs::remove_dir_all(&d);
+}

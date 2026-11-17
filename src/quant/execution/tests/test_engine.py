@@ -41,11 +41,20 @@ def sandbox(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def broker(monkeypatch):
-    """The Alpaca paper API behind urlopen: GET positions answers `positions` (or raises it), each POST is recorded and raises for the symbols in `fail`."""
-    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"symbol": "BBB", "qty": "4", "side": "long"}])
+    """The Alpaca paper API behind urlopen. GETs: positions answer `positions` (or raise it), the account answers `equity`, an order looked up by its
+    client order id answers `orders[id]` or 404. Each POST is recorded and raises for the symbols in `fail`."""
+    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"symbol": "BBB", "qty": "4", "side": "long"}], equity="10000", orders={})
 
     def urlopen(req, timeout):
         if req.get_method() == "GET":
+            path = req.full_url.removeprefix(PAPER)
+            if path == "/v2/account":
+                return io.BytesIO(json.dumps({"equity": state.equity}).encode())
+            if path.startswith("/v2/orders:by_client_order_id?client_order_id="):
+                cid = path.split("=", 1)[1]
+                if cid not in state.orders:
+                    raise urllib.error.HTTPError(req.full_url, 404, "not found", {}, io.BytesIO(b"{}"))
+                return io.BytesIO(json.dumps(state.orders[cid]).encode())
             if isinstance(state.positions, Exception):
                 raise state.positions
             return io.BytesIO(json.dumps(state.positions).encode())
@@ -356,7 +365,7 @@ class TestTrancheLedger:
         p = ready()
         E.send(p, True, sleep=0)
         broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]                 # both orders filled
-        assert E.reconcile_sent(p) == [] and LG.tranche(LG.load(), 0) == {"AAA": 10.0} and events()[-1] == "ledger_updated"
+        assert E.reconcile_sent(p) == [] and LG.tranche(LG.load(), 0) == {"AAA": 10.0} and events()[-2:] == ["ledger_updated", "reconciled"]   # the ledger first
 
     def test_a_reconciliation_with_differences_leaves_the_ledger_and_blocks_the_tranche(self, broker):
         p = ready()
@@ -516,7 +525,7 @@ class TestShortSales:
 
         def urlopen(req, timeout):
             if req.get_method() == "GET":
-                return io.BytesIO(b"[]")
+                return io.BytesIO(b'{"equity": "100000"}' if req.full_url.endswith("/v2/account") else b"[]")
             state.requests.append(json.loads(req.data))
             return io.BytesIO(json.dumps({"id": "o", "status": "accepted"}).encode())
 
@@ -576,3 +585,64 @@ class TestShortSales:
     def test_a_short_fraction_above_the_cap_is_refused(self, alp):
         with pytest.raises(E.Refused, match="outside"):
             E.check_gates(self.signed([{"ticker": "AAA", "quantity": 1.0, "usd": 100.0, "side": "BUY"}], sf=0.5), True)
+
+
+class TestHardening:
+    """Amendment A15: the plan file is sealed, the account value is checked against the equity, reconciliation needs a finished send and looks up
+    orders whose send failed."""
+
+    def test_a_plan_edited_after_it_was_recorded_is_refused_even_with_a_valid_hash_and_token(self, broker):
+        p = ready()
+        p["tranche"] = 2                                                           # outside the hash: only the seal sees it
+        with pytest.raises(E.Refused, match="plan file changed since it was recorded"):
+            E.send(p, True, sleep=0)
+        assert broker.requests == []
+
+    def test_a_plan_recorded_without_a_seal_must_be_made_again(self, broker):
+        p = plan()
+        A.log("plan", plan_hash=p["plan_hash"], orders=2, broker="alpaca")         # as written before A15
+        (E.CONFIRM / f"{p['plan_hash']}.token").write_text(p["plan_hash"])
+        with pytest.raises(E.Refused, match="without a digest"):
+            E.check_gates(p, True)
+
+    def test_a_plan_sized_on_more_than_the_accounts_equity_is_refused(self, broker):
+        broker.equity = "9000"                                                     # the plan says 10,000: more than 5% above
+        with pytest.raises(E.Refused, match="account's equity is 9,000.00 USD"):
+            E.send(ready(), True, sleep=0)
+        assert broker.requests == [] and events()[-1] == "refused"
+
+    def test_an_unreadable_account_stops_the_send(self, broker, monkeypatch):
+        def no_account():
+            raise OSError("network down")
+        monkeypatch.setattr(E.ALP, "account", no_account)
+        with pytest.raises(E.Refused, match="account equity could not be read"):
+            E.send(ready(), True, sleep=0)
+
+    def test_a_reconciliation_while_a_send_holds_the_lock_or_after_an_unfinished_send_is_refused(self, broker):
+        p = ready()
+        E.send(p, True, sleep=0)
+        E.LOCK.write_text("")
+        with pytest.raises(E.Refused, match="a send is running"):
+            E.reconcile_sent(p)
+        E.LOCK.unlink()
+        q = ready(plan(tranche_fraction=0.5) | {"tranche": 1, "held": {}})
+        A.log("send_started", plan_hash=q["plan_hash"], held_before={}, broker="alpaca")
+        with pytest.raises(E.Refused, match="no send_finished record"):
+            E.reconcile_sent(q)
+
+    def test_an_order_whose_send_failed_but_filled_counts_and_one_still_open_blocks(self, broker):
+        p = ready()
+        broker.fail = {"AAA"}
+        E.send(p, True, sleep=0)
+        cid = f"{p['plan_hash'][:24]}-0"
+        broker.orders[cid] = {"status": "accepted", "filled_qty": "0"}
+        with pytest.raises(E.Refused, match="still open at Alpaca"):
+            E.reconcile_sent(p)
+        broker.orders[cid] = {"status": "filled", "filled_qty": "10"}
+        broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]
+        assert E.reconcile_sent(p) == [] and LG.tranche(LG.load(), 0) == {"AAA": 10.0} and "errored_order_found_filled" in events()
+
+    def test_the_broker_keys_never_follow_a_redirect(self, broker):
+        E.send(ready(), True, sleep=0)
+        req, _ = broker.requests[0]
+        assert "Apca-api-key-id" not in req.headers and req.unredirected_hdrs["Apca-api-key-id"] == "kid-x1"

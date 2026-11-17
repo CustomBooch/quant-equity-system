@@ -1,6 +1,6 @@
 """The PAPER audit log, lab/paper/audit.jsonl (SPEC section 7, amendment A5): append-only JSON lines, one per plan, refusal, batch, order and reconciliation.
 Each record carries `prev`, the SHA-256 of the line before it, so an edited, inserted, reordered or deleted line breaks the chain (`verify`). Records written before the
-chain began have no `prev`; the first chained record covers them. Lines cut from the end leave a valid chain: compare `head` with the value preflight last reported."""
+chain began have no `prev`; the first chained record covers them, and only those listed in PRE_CHAIN are accepted (amendment A15). Lines cut from the end leave a valid chain: compare `head` with the value preflight last reported."""
 from __future__ import annotations
 
 import datetime as dt
@@ -12,6 +12,8 @@ from typing import Any
 from quant.core.paths import REPO
 
 PATH = REPO / "lab/paper/audit.jsonl"
+# Records written before the chain began (amendment A5), by the SHA-256 of their line (amendment A15); any other record without `prev` breaks the chain.
+PRE_CHAIN: frozenset[str] = frozenset()                 # no record predates the chain here
 
 
 def sha(line: bytes) -> str:
@@ -51,7 +53,7 @@ def verify() -> dict[str, Any]:
             broken.append(i + 1)
             continue
         if "prev" not in rec:
-            if start is not None:
+            if start is not None or sha(line) not in PRE_CHAIN:
                 broken.append(i + 1)
             continue
         start = i if start is None else start

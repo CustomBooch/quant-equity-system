@@ -54,7 +54,8 @@ class TestMakePlan:
         p = plan()
         f = P.write_plan(p)
         assert f == P.PLANS / f"{p['plan_hash']}.json" and json.loads(f.read_text()) == p
-        assert A.records()[0] | {"utc": None, "prev": None} == {"utc": None, "event": "plan", "plan_hash": p["plan_hash"], "file": str(f), "orders": 2, "slot": None, "tranche": None, "broker": "", "prev": None}
+        assert A.records()[0] | {"utc": None, "prev": None} == {"utc": None, "event": "plan", "plan_hash": p["plan_hash"], "file": str(f), "orders": 2, "slot": None, "tranche": None, "broker": "",
+                                                                    "plan_sha256": P.plan_seal(p), "prev": None}
 
 
 def test_latest_prices_carry_the_last_close_forward_and_drop_non_positive_prices(yahoo):
@@ -76,6 +77,13 @@ def test_a_plan_from_an_alpaca_book_names_its_broker_and_trades_plain_symbols(tm
     pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(f, index=False)
     p = P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 10, 27))
     assert p["broker"] == "alpaca" and {o["ticker"] for o in p["orders"]} == {"AAA", "BBB"}
+
+
+def test_a_book_that_prices_a_symbol_from_another_ticker_is_refused(tmp_path, yahoo, no_network):
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA", "BRK.B"], "ticker": ["BBB", "BRK-B"], "w": [0.5, 0.5]}).to_csv(f, index=False)    # BRK.B / BRK-B is one security
+    with pytest.raises(ValueError, match=r"different Yahoo tickers .*\['AAA->BBB'\]"):
+        P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 10, 27))
 
 
 def test_a_book_without_a_column_of_alpaca_symbols_is_refused(tmp_path, yahoo, no_network):

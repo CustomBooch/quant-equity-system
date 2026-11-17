@@ -36,6 +36,12 @@ def test_a_changed_missing_or_unlisted_file_fails_verification(rel, mutate, msg)
         verify_release(rel)
 
 
+def test_only_the_root_manifest_is_unlisted_and_a_nested_version_json_must_be_listed(rel):
+    (rel / "sub" / "VERSION.json").write_text("{}")                             # added after the release was written
+    with pytest.raises(ReleaseError, match="not listed.*sub/VERSION.json"):
+        verify_release(rel)
+
+
 def test_an_existing_release_is_never_overwritten_and_an_unknown_schema_is_refused(rel):
     with pytest.raises(ReleaseError, match="already exists"):
         write_release(rel, "t_v1")

@@ -20,7 +20,7 @@ verify_release <- function(dir) {
     }
   }
   present <- list.files(dir, recursive = TRUE, all.files = TRUE, no.. = TRUE)
-  present <- present[basename(present) != "VERSION.json"]
+  present <- present[present != "VERSION.json"]   # only the root manifest; a nested VERSION.json must be listed (amendment A15)
   extra <- setdiff(present, names(files))
   if (length(extra) > 0) problems <- c(problems, paste0("not listed in manifest: ", extra))
   if (length(problems) > 0) stop(paste(problems, collapse = "; "))

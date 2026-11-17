@@ -72,7 +72,7 @@ def utc_stamp(now: dt.datetime | None = None) -> str:
 
 
 def _listed(directory: Path) -> list[str]:
-    return sorted(p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file() and p.name != MANIFEST)
+    return sorted(rel for p in directory.rglob("*") if p.is_file() and (rel := p.relative_to(directory).as_posix()) != MANIFEST)
 
 
 def _commit() -> str | None:

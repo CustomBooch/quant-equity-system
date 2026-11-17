@@ -17,6 +17,11 @@ from quant.core.sql import one_row
 BATCH = 40                      # columns fingerprinted per scan
 
 
+def ident(name: str) -> str:
+    """`name` as a quoted SQL identifier: a column name read from a file is data, never SQL (amendment A15)."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def columns(con: duckdb.DuckDBPyConnection, pq: str) -> list[str]:
     """Column names of a parquet file, in file order."""
     return [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{pq}')").fetchall()]
@@ -28,7 +33,7 @@ def fingerprints(con: duckdb.DuckDBPyConnection, pq: str, cols: list[str], where
     out: dict[str, int] = {}
     for i in range(0, len(cols), BATCH):
         part = cols[i:i + BATCH]
-        row = one_row(con, f"SELECT {', '.join(f'sum(hash(permno, month, {c}))' for c in part)} FROM read_parquet('{pq}') WHERE {where}")
+        row = one_row(con, f"SELECT {', '.join(f'sum(hash(permno, month, {ident(c)}))' for c in part)} FROM read_parquet('{pq}') WHERE {where}")
         out.update(zip(part, row, strict=True))                                   # one aggregate per column of the batch
     return out
 

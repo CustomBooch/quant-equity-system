@@ -7,6 +7,7 @@ import urllib.request
 from typing import Any
 
 from quant.core.env import env
+from quant.execution.brokers.http import secret_get
 
 PAPER = "https://paper-api.alpaca.markets"                   # paper account only; no other host is ever called
 
@@ -16,14 +17,14 @@ def headers() -> dict[str, str]:
     key, secret = env("ALPACA_PAPER_KEY_ID"), env("ALPACA_PAPER_SECRET")
     if not key or not secret:
         raise RuntimeError("ALPACA_PAPER_KEY_ID or ALPACA_PAPER_SECRET is not set: start the command with `dotenvx run -- ...` (keys are in the encrypted .env)")
-    return {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret, "User-Agent": "quant-research-readonly"}
+    return {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
 
 
 def get(path: str) -> Any:
     """GET PAPER + path (path must start with /v2/); parsed JSON. HTTP errors raise."""
     if not path.startswith("/v2/"):
         raise ValueError(f"unexpected path {path!r}: only /v2/ GETs are allowed")
-    req = urllib.request.Request(PAPER + path, headers=headers(), method="GET")
+    req = secret_get(PAPER + path, headers(), {"User-Agent": "quant-research-readonly"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read())
 

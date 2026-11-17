@@ -87,6 +87,8 @@ def score_freshness(today: dt.date) -> tuple[bool, str]:
     if not sm:
         return False, "no scored month found"
     age = months_between(sm, today)              # a score for decision month M uses inputs through the end of M-1, so its age is measured from the start of M
+    if age < 0:
+        return False, f"latest EXAMPLE decision month {sm} is after today ({today}): a score cannot be dated in the future"
     return age <= MAX_SCORE_AGE_MONTHS + 1.0, f"latest EXAMPLE decision month {sm}; age {age:.1f} months from the start of that month (rule: decision month must be the current month or the previous one)"
 
 

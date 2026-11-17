@@ -33,3 +33,8 @@ test_that("validation is required only when asked, and every gate must pass", {
   expect_error(require_validation(verify_release(ex("release_failed_gate_v1"))), "gates not passed")
   expect_error(require_validation(verify_release(example)), "no validation block")
 })
+
+test_that("a nested VERSION.json must be listed: only the root manifest is exempt", {
+  d <- scratch(); writeLines("{}", file.path(d, "data", "VERSION.json"))
+  expect_error(verify_release(d), "not listed in manifest: data/VERSION.json")
+})

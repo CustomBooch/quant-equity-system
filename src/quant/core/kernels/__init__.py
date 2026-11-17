@@ -21,7 +21,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -232,7 +231,7 @@ def pre_trade_check(plan_json: str, kill_switch_on: bool, preflight_go: bool, ow
 
 def _cargo_env() -> dict[str, Any]:
     env = dict(os.environ)
-    env.setdefault("CARGO_TARGET_DIR", str(Path(tempfile.gettempdir()) / "rust_core_target"))
+    env.setdefault("CARGO_TARGET_DIR", str(DEFAULT_DIR.parent / "rust_target"))        # under the user's profile, not the shared temporary folder
     extra = [str(Path.home() / ".cargo" / "bin")]
     wl = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
     extra += [str(p / "mingw64" / "bin") for p in wl.glob("BrechtSanders.WinLibs*")] if wl.exists() else []

@@ -28,7 +28,7 @@ def sha256(p: Path) -> str:
 def frozen_entries(freeze: Path | None = None) -> dict[str, str]:
     """{repository-relative path: sha256} of every frozen file: the code, the v0 artefacts, the historical predictions and the hashed data snapshots."""
     path = freeze or FREEZE
-    if not path.is_file():                                  # the public edition ships no frozen artefacts
+    if not path.is_file() and not path.parent.exists():      # no freeze folder at all: nothing has been frozen in this checkout
         return {}
     f = json.loads(path.read_text())
     ent: dict[str, str] = {}

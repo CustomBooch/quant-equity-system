@@ -38,10 +38,12 @@ from zoneinfo import ZoneInfo
 
 from quant.core import kernels as KN
 from quant.execution.brokers.alpaca import api as ALP
+from quant.execution.brokers.http import with_secrets
 from quant.execution import audit as A
 from quant.execution import ledger as LG
 from quant.portfolio import schedule as SCH
 from quant.portfolio.broker import BROKER, MAX_GROSS, MAX_SHORT_FRAC, MAX_SHORT_LEG, SHORTS, usd_line
+from quant.portfolio import plan as P
 from quant.portfolio.plan import QTY_DECIMALS, ROOT, book_exposure, plan_from_target, plan_hash, write_plan
 from quant.core.paths import REPO
 
@@ -50,6 +52,7 @@ PREFLIGHT = [sys.executable, "-m", "quant.execution.preflight"], REPO / "lab/rea
 MAX_ORDER_FRAC = 0.10                                       # SPEC section 4: refuse any single order above 10% of the account
 MAX_PLAN_AGE = dt.timedelta(days=4)                         # a plan made from Friday's close can be sent on the Tuesday slot, not a week later
 SEND_BROKER = BROKER                                        # amendment A10: plans for any other broker are refused
+MAX_ACCOUNT_EXCESS = 0.05                                   # amendment A15: a plan may size on at most 5% more than the account's equity at send time
 NEW_YORK = ZoneInfo("America/New_York")
 AUCTION_CLOSED = (dt.time(9, 28), dt.time(19, 0))            # amendment A13: Alpaca rejects opening-auction orders sent between these New York times
 CLOCK: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc)   # noqa: E731 - replaced in tests
@@ -132,6 +135,16 @@ def unsettled(tranche: int) -> str | None:
     return newest
 
 
+def sealed_unchanged(plan: dict[str, Any], record: dict[str, Any]) -> None:
+    """Refuse a plan whose file no longer matches the digest recorded when it was written (amendment A15). The plan hash, which the owner's token
+    confirms and rust_core re-derives, covers only the orders and the account value; the tranche, the holdings, the leverage and every other field
+    are held by this digest."""
+    if "plan_sha256" not in record:
+        raise Refused("the plan was recorded without a digest of its file (before amendment A15): make a new plan")
+    if P.plan_seal(plan) != record["plan_sha256"]:
+        raise Refused("the plan file changed since it was recorded (tranche, holdings or another field): make a new plan")
+
+
 def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | None = None) -> None:
     """Raises Refused naming the first gate that fails, in the order of the module docstring."""
     h, orders, acct = plan["plan_hash"], plan["orders"], plan["account_value_usd"]
@@ -152,6 +165,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused("no plan record for this hash in the audit log")
     if made[0].get("broker", "") != b:
         raise Refused("the plan's broker differs from the one recorded when it was made")
+    sealed_unchanged(plan, made[0])
     if (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(made[0]["utc"]) > MAX_PLAN_AGE:
         raise Refused(f"plan recorded {made[0]['utc']}, more than {MAX_PLAN_AGE.days} days ago: make a new plan at current prices")
     if any(r["event"] in ("send_started", "sent") for r in past):
@@ -261,8 +275,8 @@ def send_alpaca_line(o: dict[str, Any], h: str, i: int) -> list[dict[str, Any]]:
 
 
 def alpaca_post(body: dict[str, Any]) -> dict[str, Any]:
-    req = urllib.request.Request(ALP.PAPER + "/v2/orders", data=json.dumps(body).encode(), method="POST",
-                                 headers={**ALP.headers(), "Content-Type": "application/json", "User-Agent": "quant-research-paper"})
+    req = with_secrets(urllib.request.Request(ALP.PAPER + "/v2/orders", data=json.dumps(body).encode(), method="POST",
+                                              headers={"Content-Type": "application/json", "User-Agent": "quant-research-paper"}), ALP.headers())
     with urllib.request.urlopen(req, timeout=60) as r:
         answer: dict[str, Any] = json.loads(r.read())
         return answer
@@ -295,6 +309,13 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             raise Refused(f"positions could not be read: {e!r}"[:200]) from e
         if late := auction_window_problem(CLOCK()):
             raise Refused(late)
+        try:
+            equity = ALP.equity_usd(ALP.account())
+        except Exception as e:  # noqa: BLE001 - the limits cannot be checked against the account, so nothing is sent
+            raise Refused(f"account equity could not be read: {e!r}"[:200]) from e
+        if plan["account_value_usd"] > equity * (1 + MAX_ACCOUNT_EXCESS):
+            raise Refused(f"the plan sizes orders on {plan['account_value_usd']:,.2f} USD but the account's equity is {equity:,.2f} USD "
+                          f"(more than {MAX_ACCOUNT_EXCESS:.0%} above it): make a new plan with --account-usd at most the equity")
     except Refused as e:
         A.log("refused", plan_hash=h, reason=str(e))
         raise
@@ -317,8 +338,9 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
     return out
 
 
-def reconcile(h: str, orders: list[dict[str, Any]], held_before: dict[str, float], held_after: dict[str, float], tol: float = 1e-3) -> list[dict[str, Any]]:
-    """Differences between the positions read back and those expected: `held_before` plus `orders`."""
+def reconcile(h: str, orders: list[dict[str, Any]], held_before: dict[str, float], held_after: dict[str, float], tol: float = 1e-3,
+              record: bool = True) -> list[dict[str, Any]]:
+    """Differences between the positions read back and those expected: `held_before` plus `orders`. `record=False` leaves the log to the caller."""
     exp = dict(held_before)
     for o in orders:
         exp[o["ticker"]] = round(exp.get(o["ticker"], 0.0) + o["quantity"], QTY_DECIMALS)
@@ -327,8 +349,45 @@ def reconcile(h: str, orders: list[dict[str, Any]], held_before: dict[str, float
         d = held_after.get(t, 0.0) - exp.get(t, 0.0)
         if abs(d) > tol:
             diffs.append({"ticker": t, "expected": exp.get(t, 0.0), "actual": held_after.get(t, 0.0), "diff": round(d, QTY_DECIMALS)})
-    A.log("reconciled", plan_hash=h, differences=len(diffs))
+    if record:
+        A.log("reconciled", plan_hash=h, differences=len(diffs))
     return diffs
+
+
+OPEN_STATUSES = frozenset({"new", "accepted", "pending_new", "accepted_for_bidding", "partially_filled", "held", "pending_replace", "calculated"})
+
+
+def alpaca_lookup(client_order_id: str) -> dict[str, Any] | None:
+    """The Alpaca order with this client order id, or None if Alpaca has none (HTTP 404)."""
+    try:
+        found: dict[str, Any] = ALP.get(f"/v2/orders:by_client_order_id?client_order_id={client_order_id}")
+        return found
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def recovered_fills(plan: dict[str, Any], past: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Plan lines whose send raised (a timeout, a lost response) looked up at Alpaca by their client order ids (amendment A15). One still open there
+    refuses the reconciliation (it may yet fill); one that filled counts as an accepted order of its filled quantity, and is logged."""
+    h, out = plan["plan_hash"], []
+    for r in (r for r in past if r["event"] == "error"):
+        o = r["order"]
+        i = plan["orders"].index(o)
+        filled = 0.0
+        for cid in (f"{h[:24]}-{i}", f"{h[:24]}-{i}f", f"{h[:24]}-{i}d"):
+            got = alpaca_lookup(cid)
+            if got is None:
+                continue
+            if got.get("status") in OPEN_STATUSES:
+                raise Refused(f"order {cid} ({o['ticker']}) whose send failed is still open at Alpaca ({got.get('status')}): reconcile after it ends")
+            filled += float(got.get("filled_qty") or 0)
+        if filled:
+            q = round(math.copysign(filled, o["quantity"]), QTY_DECIMALS)
+            A.log("errored_order_found_filled", plan_hash=h, order=o, filled_quantity=q)
+            out.append({**o, "quantity": q})
+    return out
 
 
 def reconcile_sent(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -338,14 +397,23 @@ def reconcile_sent(plan: dict[str, Any]) -> list[dict[str, Any]]:
     started = [r for r in past if r["event"] == "send_started"]
     if not started:
         raise Refused("this plan was never sent")
-    accepted = [r["order"] for r in past if r["event"] == "sent"]
-    diffs = reconcile(plan["plan_hash"], accepted, started[-1]["held_before"], broker_positions(broker_of(plan)))
+    if LOCK.exists():
+        raise Refused(f"a send is running, or one stopped without finishing ({LOCK.name} exists): reconcile after it ends")
+    if not any(r["event"] == "send_finished" for r in past):
+        raise Refused("the send of this plan has no send_finished record: it stopped part way; read the audit log before reconciling")
+    made = [r for r in past if r["event"] == "plan"]
+    if not made:
+        raise Refused("no plan record for this hash in the audit log")
+    sealed_unchanged(plan, made[0])
+    accepted = [r["order"] for r in past if r["event"] == "sent"] + recovered_fills(plan, past)
+    diffs = reconcile(plan["plan_hash"], accepted, started[-1]["held_before"], broker_positions(broker_of(plan)), record=False)
     if not diffs:                                               # the tranche now holds what it held plus what the broker accepted: the start of its next plan
         new = dict(plan.get("held", {}))
         for o in accepted:
             new[o["ticker"]] = round(new.get(o["ticker"], 0.0) + o["quantity"], QTY_DECIMALS)
-        LG.record_batch(LG.load(), plan["tranche"], new)
+        LG.record_batch(LG.load(), plan["tranche"], new)          # the ledger first: a settled record is never written before the holdings it settles
         A.log("ledger_updated", plan_hash=plan["plan_hash"], tranche=plan["tranche"], lines=sum(1 for q in new.values() if q))
+    A.log("reconciled", plan_hash=plan["plan_hash"], differences=len(diffs))
     return diffs
 
 

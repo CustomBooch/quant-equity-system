@@ -14,8 +14,11 @@ fn walk(dir: &Path, root: &Path, out: &mut BTreeSet<String>) -> Result<(), Strin
         let p: PathBuf = e.map_err(|e| e.to_string())?.path();
         if p.is_dir() {
             walk(&p, root, out)?;
-        } else if p.file_name().is_some_and(|n| n != MANIFEST) {
-            out.insert(p.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"));
+        } else {
+            let rel = p.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+            if rel != MANIFEST {
+                out.insert(rel);                                // only the root manifest is not a listed file; a nested VERSION.json is (A15)
+            }
         }
     }
     Ok(())
