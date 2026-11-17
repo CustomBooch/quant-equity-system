@@ -7,6 +7,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import subprocess
 from typing import Any
 
 from quant.core.paths import REPO
@@ -40,6 +41,30 @@ def log(event: str, **kw: Any) -> dict[str, Any]:
     return rec
 
 
+def anchor_problem() -> str | None:
+    """Why the log is not the one git last committed, or None (amendment A16). The chain proves the lines agree with each other, not that they are the
+    lines that were written; the committed copy is the anchor outside the file: every committed line must still be there, unchanged and in place. None when
+    the log is not tracked by git, git cannot be run here, or nothing is committed yet (a check that cannot run is not a failed check)."""
+    def run(*args: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(["git", *args], cwd=PATH.parent, capture_output=True, check=False, timeout=60)
+
+    try:
+        if run("ls-files", "--error-unmatch", "--", PATH.name).returncode:
+            return None
+        shown = run("show", f"HEAD:./{PATH.name}")
+        if shown.returncode:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    committed, now = shown.stdout.splitlines(), lines()
+    if len(now) < len(committed):
+        return f"the log has {len(now)} lines but git last committed {len(committed)}: lines were removed since the last commit"
+    for i, line in enumerate(committed):
+        if now[i] != line:
+            return f"line {i + 1} differs from the line git last committed: the log was changed after it was committed"
+    return None
+
+
 def verify() -> dict[str, Any]:
     """records: lines in the log; unchained: leading records written before the chain began; broken: 1-based numbers of lines that are not a JSON object,
     lack `prev` after the chain began, or whose `prev` is not the hash of the line before; head: hash of the newest line."""
@@ -59,4 +84,5 @@ def verify() -> dict[str, Any]:
         start = i if start is None else start
         if rec["prev"] != (sha(ls[i - 1]) if i else None):
             broken.append(i + 1)
-    return {"records": len(ls), "unchained": len(ls) if start is None else start, "broken": broken, "head": sha(ls[-1]) if ls else None}
+    return {"records": len(ls), "unchained": len(ls) if start is None else start, "broken": broken, "head": sha(ls[-1]) if ls else None,
+            "anchor_problem": anchor_problem()}

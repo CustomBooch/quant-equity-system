@@ -79,3 +79,10 @@ def test_a_pointer_saved_by_an_editor_with_a_byte_order_mark_is_read(tmp_path):
     entry = PT.entry_for(tmp_path / "r1", "first", [])
     ptr.write_bytes(json.dumps({"current": entry}).encode("utf-8-sig"))
     assert PT.read(ptr)["current"]["sha256"] == entry["sha256"]
+
+
+def test_a_release_folder_whose_name_holds_a_quote_and_sql_is_read_as_a_path_not_run(tmp_path):
+    name = "r'); COPY (SELECT 1) TO 'pwned.csv'; SELECT ('"
+    make_release(tmp_path / name, {"a": "pass"})
+    entry = PT.entry_for(tmp_path / name, "x", [])
+    assert entry["rows"] == 2 and not list(tmp_path.glob("**/pwned.csv")) and not (tmp_path / "pwned.csv").exists()

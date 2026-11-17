@@ -52,6 +52,7 @@ PREFLIGHT = [sys.executable, "-m", "quant.execution.preflight"], REPO / "lab/rea
 MAX_ORDER_FRAC = 0.10                                       # SPEC section 4: refuse any single order above 10% of the account
 MAX_PLAN_AGE = dt.timedelta(days=4)                         # a plan made from Friday's close can be sent on the Tuesday slot, not a week later
 SEND_BROKER = BROKER                                        # amendment A10: plans for any other broker are refused
+QTY_TOLERANCE = 5e-5                                        # amendment A16: half the smallest quantity step (4 decimals): a fraction of a share is a difference
 MAX_ACCOUNT_EXCESS = 0.05                                   # amendment A15: a plan may size on at most 5% more than the account's equity at send time
 NEW_YORK = ZoneInfo("America/New_York")
 AUCTION_CLOSED = (dt.time(9, 28), dt.time(19, 0))            # amendment A13: Alpaca rejects opening-auction orders sent between these New York times
@@ -145,6 +146,45 @@ def sealed_unchanged(plan: dict[str, Any], record: dict[str, Any]) -> None:
         raise Refused("the plan file changed since it was recorded (tranche, holdings or another field): make a new plan")
 
 
+def account_equity() -> float:
+    """The Alpaca paper account's equity in USD, read now."""
+    return ALP.equity_usd(ALP.account())
+
+
+def check_account_value(plan: dict[str, Any]) -> None:
+    """Refuse a plan sized on more than MAX_ACCOUNT_EXCESS above the account's equity read now, or when the equity cannot be read (amendment A15)."""
+    try:
+        equity = account_equity()
+    except Exception as e:  # noqa: BLE001 - the limits cannot be checked against the account, so nothing is sent
+        raise Refused(f"account equity could not be read: {e!r}"[:200]) from e
+    if plan["account_value_usd"] > equity * (1 + MAX_ACCOUNT_EXCESS):
+        raise Refused(f"the plan sizes orders on {plan['account_value_usd']:,.2f} USD but the account's equity is {equity:,.2f} USD "
+                      f"(more than {MAX_ACCOUNT_EXCESS:.0%} above it): make a new plan with --account-usd at most the equity")
+
+
+def ledger_vs_positions(positions: dict[str, float]) -> str:
+    """How the account's positions differ from the sum of the tranche ledger (amendment A16), or "" when they agree. A plan sells what the ledger says is
+    held: if the account holds less (or more) because of a trade outside the engine, a sale can open a short position the short-sale gates never saw."""
+    agg = LG.aggregate(LG.load())
+    diffs = {t: round(positions.get(t, 0.0) - agg.get(t, 0.0), QTY_DECIMALS) for t in sorted(set(positions) | set(agg))}
+    off = {t: d for t, d in diffs.items() if abs(d) > QTY_TOLERANCE}
+    return "; ".join(f"{t}: account {positions.get(t, 0.0):g}, ledger {agg.get(t, 0.0):g}" for t in list(off)[:8]) + (" ..." if len(off) > 8 else "")
+
+
+def check_decision_month(plan: dict[str, Any], today: dt.date) -> None:
+    """Refuse a plan whose target book is stale (amendment A16): preflight's freshness rule judges the newest score file, but a plan can be made from any
+    book, so the rule is applied to the decision month of the book the plan was made from."""
+    from quant.execution import preflight as PF
+
+    dm = plan.get("decision_month")
+    if not (isinstance(dm, str) and len(dm) == 7 and dm[4] == "-" and dm[:4].isdigit() and dm[5:].isdigit() and 1 <= int(dm[5:]) <= 12):
+        raise Refused(f"the plan names no valid decision month ({dm!r}): make a new plan from a target book that records one")
+    age = PF.months_between(f"{dm}-01", today)
+    if age < 0 or age > PF.MAX_SCORE_AGE_MONTHS + 1.0:
+        raise Refused(f"the plan's target book is for decision month {dm} ({age:.1f} months old from its start; a plan needs the current or previous month): "
+                      "make a new plan from the newest book")
+
+
 def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | None = None) -> None:
     """Raises Refused naming the first gate that fails, in the order of the module docstring."""
     h, orders, acct = plan["plan_hash"], plan["orders"], plan["account_value_usd"]
@@ -152,8 +192,11 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused("kill switch present")
     if not preflight_go:
         raise Refused("preflight is not GO")
-    if broken := A.verify()["broken"]:
-        raise Refused(f"audit log chain broken at line(s) {broken}")
+    chain = A.verify()
+    if chain["broken"]:
+        raise Refused(f"audit log chain broken at line(s) {chain['broken']}")
+    if chain["anchor_problem"]:
+        raise Refused(f"audit log: {chain['anchor_problem']}")
     if plan_hash(orders, acct) != h:
         raise Refused("plan changed since it was written")
     b = broker_of(plan)
@@ -166,6 +209,9 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
     if made[0].get("broker", "") != b:
         raise Refused("the plan's broker differs from the one recorded when it was made")
     sealed_unchanged(plan, made[0])
+    check_decision_month(plan, (now or dt.datetime.now(dt.timezone.utc)).date())
+    if unsold := [s["ticker"] for s in plan.get("skipped", []) if s.get("reason") == "no_price" and s.get("ticker") in plan.get("held", {})]:
+        raise Refused(f"positions the plan could not price, so could not trade: {unsold}: find their prices or close them by hand, then make a new plan")
     if (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(made[0]["utc"]) > MAX_PLAN_AGE:
         raise Refused(f"plan recorded {made[0]['utc']}, more than {MAX_PLAN_AGE.days} days ago: make a new plan at current prices")
     if any(r["event"] in ("send_started", "sent") for r in past):
@@ -180,7 +226,8 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
     if not token.exists() or read_token(token) != h:
         raise Refused("no owner confirmation for this plan")
     tickers = [o["ticker"] for o in orders]
-    bad = [o["ticker"] for o in orders if not (math.isfinite(o["quantity"]) and o["quantity"] != 0 and o["side"] == ("BUY" if o["quantity"] > 0 else "SELL"))]
+    bad = [o["ticker"] for o in orders if not (math.isfinite(o["quantity"]) and o["quantity"] != 0 and o["side"] == ("BUY" if o["quantity"] > 0 else "SELL")
+                                                and isinstance(o["usd"], (int, float)) and math.isfinite(o["usd"]) and o["usd"] > 0)]
     if bad or len(set(tickers)) != len(tickers):
         raise Refused(f"malformed orders: {bad or 'a ticker appears twice'}")
     if big := [o["ticker"] for o in orders if o["usd"] > MAX_ORDER_FRAC * acct]:
@@ -205,6 +252,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"buys total {buys:,.2f} USD, more than the account's {acct:,.2f}" if not sf and lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than (1 + {sf}) x the account" if lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than {lev} x (1 + {sf}) x the account")
+    check_account_value(plan)
     if ss := short_sales(plan):
         names = [o["ticker"] for o, _ in ss]
         if sf <= 0:
@@ -309,13 +357,10 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             raise Refused(f"positions could not be read: {e!r}"[:200]) from e
         if late := auction_window_problem(CLOCK()):
             raise Refused(late)
-        try:
-            equity = ALP.equity_usd(ALP.account())
-        except Exception as e:  # noqa: BLE001 - the limits cannot be checked against the account, so nothing is sent
-            raise Refused(f"account equity could not be read: {e!r}"[:200]) from e
-        if plan["account_value_usd"] > equity * (1 + MAX_ACCOUNT_EXCESS):
-            raise Refused(f"the plan sizes orders on {plan['account_value_usd']:,.2f} USD but the account's equity is {equity:,.2f} USD "
-                          f"(more than {MAX_ACCOUNT_EXCESS:.0%} above it): make a new plan with --account-usd at most the equity")
+        ledger_differs = ledger_vs_positions(before)
+        if ledger_differs:
+            raise Refused(f"the account's positions are not what the tranche ledger holds ({ledger_differs}): find the trade outside the engine, "
+                          "then settle the ledger, before any new batch")
     except Refused as e:
         A.log("refused", plan_hash=h, reason=str(e))
         raise
@@ -338,9 +383,9 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
     return out
 
 
-def reconcile(h: str, orders: list[dict[str, Any]], held_before: dict[str, float], held_after: dict[str, float], tol: float = 1e-3,
-              record: bool = True) -> list[dict[str, Any]]:
-    """Differences between the positions read back and those expected: `held_before` plus `orders`. `record=False` leaves the log to the caller."""
+def reconcile(orders: list[dict[str, Any]], held_before: dict[str, float], held_after: dict[str, float], tol: float = QTY_TOLERANCE) -> list[dict[str, Any]]:
+    """Differences between the positions read back and those expected: `held_before` plus `orders`. Writes nothing: the settled record belongs after the
+    ledger (`reconcile_sent`)."""
     exp = dict(held_before)
     for o in orders:
         exp[o["ticker"]] = round(exp.get(o["ticker"], 0.0) + o["quantity"], QTY_DECIMALS)
@@ -349,9 +394,15 @@ def reconcile(h: str, orders: list[dict[str, Any]], held_before: dict[str, float
         d = held_after.get(t, 0.0) - exp.get(t, 0.0)
         if abs(d) > tol:
             diffs.append({"ticker": t, "expected": exp.get(t, 0.0), "actual": held_after.get(t, 0.0), "diff": round(d, QTY_DECIMALS)})
-    if record:
-        A.log("reconciled", plan_hash=h, differences=len(diffs))
     return diffs
+
+
+def open_plan_orders(plan: dict[str, Any]) -> list[str]:
+    """Client order ids of this plan's orders still open at Alpaca (amendment A16): an order accepted but not yet filled is not a difference yet, so a
+    reconciliation made while one is open could settle the tranche and let the next plan trade the same names again."""
+    prefix = plan["plan_hash"][:24]
+    open_orders: list[dict[str, Any]] = ALP.get("/v2/orders?status=open&limit=500")
+    return sorted(str(o.get("client_order_id")) for o in open_orders if str(o.get("client_order_id", "")).startswith(prefix))
 
 
 OPEN_STATUSES = frozenset({"new", "accepted", "pending_new", "accepted_for_bidding", "partially_filled", "held", "pending_replace", "calculated"})
@@ -406,7 +457,10 @@ def reconcile_sent(plan: dict[str, Any]) -> list[dict[str, Any]]:
         raise Refused("no plan record for this hash in the audit log")
     sealed_unchanged(plan, made[0])
     accepted = [r["order"] for r in past if r["event"] == "sent"] + recovered_fills(plan, past)
-    diffs = reconcile(plan["plan_hash"], accepted, started[-1]["held_before"], broker_positions(broker_of(plan)), record=False)
+    still_open = open_plan_orders(plan)
+    if still_open:
+        raise Refused(f"orders of this plan are still open at Alpaca ({', '.join(still_open[:6])}): reconcile after they fill or are cancelled")
+    diffs = reconcile(accepted, started[-1]["held_before"], broker_positions(broker_of(plan)))
     if not diffs:                                               # the tranche now holds what it held plus what the broker accepted: the start of its next plan
         new = dict(plan.get("held", {}))
         for o in accepted:
@@ -451,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "verify-audit":
         r = A.verify()
         print(json.dumps(r, indent=1))
-        return 1 if r["broken"] else 0
+        return 1 if r["broken"] or r["anchor_problem"] else 0
     plan = json.loads(Path(a.plan).read_text())
     try:
         out = send(plan, preflight_go(*PREFLIGHT)) if a.cmd == "send" else reconcile_sent(plan)

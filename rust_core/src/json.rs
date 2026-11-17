@@ -48,7 +48,7 @@ impl Value {
 }
 
 pub fn parse(s: &str) -> Result<Value, String> {
-    let mut p = Parser { b: s.as_bytes(), i: 0 };
+    let mut p = Parser { b: s.as_bytes(), i: 0, depth: 0 };
     let v = p.value()?;
     p.ws();
     if p.i != p.b.len() {
@@ -57,9 +57,13 @@ pub fn parse(s: &str) -> Result<Value, String> {
     Ok(v)
 }
 
+/// Deepest nesting of arrays and objects accepted (amendment A16): a deeper document is an error, not a stack overflow that aborts the process.
+pub const MAX_DEPTH: usize = 128;
+
 struct Parser<'a> {
     b: &'a [u8],
     i: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -79,6 +83,16 @@ impl Parser<'_> {
     }
 
     fn value(&mut self) -> Result<Value, String> {
+        if self.depth >= MAX_DEPTH {
+            return Err(format!("nesting deeper than {MAX_DEPTH} at byte {}", self.i));
+        }
+        self.depth += 1;
+        let r = self.value_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn value_inner(&mut self) -> Result<Value, String> {
         self.ws();
         match self.b.get(self.i) {
             None => Err("unexpected end".into()),

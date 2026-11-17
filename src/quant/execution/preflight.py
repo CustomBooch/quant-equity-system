@@ -139,6 +139,8 @@ def analyst_archive_age(today: dt.date) -> tuple[bool, str]:
 def audit_log_chain(today: dt.date) -> tuple[bool, str]:
     """Check 6: the PAPER audit log's hash chain is intact; the newest hash is reported."""
     ch = audit.verify()
+    if ch["anchor_problem"]:
+        return False, ch["anchor_problem"]
     return not ch["broken"], f"broken at line(s) {ch['broken']}" if ch["broken"] else f"{ch['records']} records ({ch['unchained']} before the chain began); newest hash {ch['head']}"
 
 

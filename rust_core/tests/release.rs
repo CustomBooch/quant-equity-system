@@ -89,3 +89,15 @@ fn a_nested_version_json_must_be_listed_only_the_root_manifest_is_exempt() {
     assert!(err.contains("not listed") && err.contains("data/VERSION.json"), "{err}");
     let _ = fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_manifest_nested_deeper_than_the_limit_is_an_error_not_a_crash() {
+    let d = scratch("deep");
+    let depth = 100_000;                                                   // would overflow the stack of a parser with no limit (amendment A16)
+    fs::write(d.join("VERSION.json"), format!("{}{}", "[".repeat(depth), "]".repeat(depth))).unwrap();
+    let err = verify_release(&d).unwrap_err();
+    assert!(err.contains("nesting deeper than"), "{err}");
+    fs::write(d.join("VERSION.json"), format!("{}{}", "[".repeat(100), "]".repeat(100))).unwrap();   // within the limit: parses, then fails on structure instead
+    assert!(!verify_release(&d).unwrap_err().contains("nesting"));
+    let _ = fs::remove_dir_all(&d);
+}

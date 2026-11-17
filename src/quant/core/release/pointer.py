@@ -19,7 +19,7 @@ import duckdb
 
 from quant.core.paths import REPO
 from quant.core.release.release import ReleaseError, sha256_file, utc_stamp, verify_release
-from quant.core.sql import one_row
+from quant.core.sql import one_row, quote
 
 POINTER = REPO / "panel/MASTER_CURRENT.json"
 PANEL_FILE = "master_panel.parquet"
@@ -55,9 +55,9 @@ def entry_for(release_dir: Path, note: str, waivers: list[dict[str, Any]], code_
     doc = verify_release(release_dir)
     pq = release_dir / PANEL_FILE
     with duckdb.connect() as con:
-        rows = _one_row(con, f"SELECT count(*) FROM read_parquet('{pq.as_posix()}')")[0]
-        cols = len(con.execute(f"DESCRIBE SELECT * FROM read_parquet('{pq.as_posix()}')").fetchall())
-        months = _one_row(con, f"SELECT min(month), max(month) FROM read_parquet('{pq.as_posix()}')")
+        rows = _one_row(con, f"SELECT count(*) FROM read_parquet({quote(pq.as_posix())})")[0]
+        cols = len(con.execute(f"DESCRIBE SELECT * FROM read_parquet({quote(pq.as_posix())})").fetchall())
+        months = _one_row(con, f"SELECT min(month), max(month) FROM read_parquet({quote(pq.as_posix())})")
     gates = (doc.get("validation") or {}).get("gates") or {}
     return {"path": repo_relative(pq), "release": repo_relative(release_dir / "VERSION.json"), "sha256": sha256_file(pq), "bytes": pq.stat().st_size, "rows": int(rows), "columns": cols,
             "months": f"{str(months[0])[:7]} to {str(months[1])[:7]}", "code_commit": code_commit or doc.get("code_commit"),

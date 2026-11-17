@@ -289,7 +289,7 @@ pub fn paper_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, owne
         let side = o.get("side").and_then(Value::as_str).ok_or("order lacks side")?;
         let usd = o.get("usd").and_then(Value::as_f64).ok_or("order lacks usd")?;
         let expected = if quantity > 0.0 { "BUY" } else { "SELL" };
-        if !quantity.is_finite() || quantity == 0.0 || side != expected || !usd.is_finite() {
+        if !quantity.is_finite() || quantity == 0.0 || side != expected || !usd.is_finite() || usd <= 0.0 {
             malformed.push(ticker.to_string());
         }
         if !seen.insert(ticker) {

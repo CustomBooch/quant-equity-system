@@ -12,7 +12,7 @@ from typing import Any
 
 import duckdb
 
-from quant.core.sql import one_row
+from quant.core.sql import one_row, quote
 
 BATCH = 40                      # columns fingerprinted per scan
 
@@ -24,7 +24,7 @@ def ident(name: str) -> str:
 
 def columns(con: duckdb.DuckDBPyConnection, pq: str) -> list[str]:
     """Column names of a parquet file, in file order."""
-    return [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{pq}')").fetchall()]
+    return [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet({quote(pq)})").fetchall()]
 
 
 def fingerprints(con: duckdb.DuckDBPyConnection, pq: str, cols: list[str], where: str) -> dict[str, int]:
@@ -33,7 +33,7 @@ def fingerprints(con: duckdb.DuckDBPyConnection, pq: str, cols: list[str], where
     out: dict[str, int] = {}
     for i in range(0, len(cols), BATCH):
         part = cols[i:i + BATCH]
-        row = one_row(con, f"SELECT {', '.join(f'sum(hash(permno, month, {ident(c)}))' for c in part)} FROM read_parquet('{pq}') WHERE {where}")
+        row = one_row(con, f"SELECT {', '.join(f'sum(hash(permno, month, {ident(c)}))' for c in part)} FROM read_parquet({quote(pq)}) WHERE {where}")
         out.update(zip(part, row, strict=True))                                   # one aggregate per column of the batch
     return out
 
@@ -46,7 +46,7 @@ def compare(old: Path, new: Path, where: str = "TRUE", memory: str = "8GB") -> d
     ca, cb = columns(con, a), columns(con, b)
     shared = [c for c in ca if c in cb]
     fa, fb = fingerprints(con, a, shared, where), fingerprints(con, b, shared, where)
-    rows = [one_row(con, f"SELECT count(*) FROM read_parquet('{p}') WHERE {where}")[0] for p in (a, b)]
+    rows = [one_row(con, f"SELECT count(*) FROM read_parquet({quote(p)}) WHERE {where}")[0] for p in (a, b)]
     return {"old": str(old), "new": str(new), "where": where, "rows": {"old": rows[0], "new": rows[1]}, "only_old": [c for c in ca if c not in cb], "only_new": [c for c in cb if c not in ca],
             "shared": len(shared), "changed": [c for c in shared if fa[c] != fb[c]]}
 

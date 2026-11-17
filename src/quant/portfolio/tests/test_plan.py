@@ -123,3 +123,19 @@ def test_an_unlevered_book_gives_a_plan_without_a_leverage_field(tmp_path, yahoo
     pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [1.2, -0.2], "side": ["long", "short"]}).to_csv(f, index=False)
     f.with_suffix(".json").write_text(json.dumps({"short_fraction": 0.2, "overlay_state": {"exposure_now": 1.0}}))
     assert "leverage" not in P.plan_from_target(f, 10000.0, 1.0, dt.date(2026, 10, 27))
+
+
+def test_a_name_the_tranche_holds_but_the_new_book_dropped_is_sold_not_silently_kept(tmp_path, yahoo, no_network):
+    """Amendment A16: held names are priced too, so one that left the book is sold (it used to be skipped as `no_price` and kept for ever)."""
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA"], "ticker": ["AAA"], "w": [1.0]}).to_csv(f, index=False)
+    p = P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 10, 27), held={"BBB": 4.0})
+    sells = {o["ticker"]: o["quantity"] for o in p["orders"] if o["side"] == "SELL"}
+    assert sells == {"BBB": -4.0} and not [s for s in p["skipped"] if s["reason"] == "no_price"]
+
+
+def test_a_dropped_short_is_covered_with_a_buy(tmp_path, yahoo, no_network):
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA"], "ticker": ["AAA"], "w": [1.0]}).to_csv(f, index=False)
+    p = P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 10, 27), held={"BBB": -3.0})
+    assert {o["ticker"]: o["quantity"] for o in p["orders"] if o["ticker"] == "BBB"} == {"BBB": 3.0}

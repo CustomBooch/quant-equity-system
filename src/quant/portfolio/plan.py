@@ -89,8 +89,9 @@ def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float
     yahoo = dict(zip(b[col], b["ticker"], strict=True))
     if odd := sorted(f"{s}->{y}" for s, y in yahoo.items() if str(s).replace(".", "-") != str(y).replace(".", "-")):
         raise ValueError(f"target book maps Alpaca symbols to different Yahoo tickers (prices would come from another security): {odd[:10]}")
-    px_y, px_date = latest_prices(sorted(set(b["ticker"])))
-    prices = {t: px_y[y] for t, y in yahoo.items() if y in px_y}
+    held_yahoo = {s: s.replace(".", "-") for s in (held or {})}                    # amendment A16: held names are priced too, so one the book dropped is sold
+    px_y, px_date = latest_prices(sorted(set(b["ticker"]) | set(held_yahoo.values())))
+    prices = {t: px_y[y] for t, y in {**held_yahoo, **yahoo}.items() if y in px_y}
     info = Path(target_csv).with_suffix(".json")
     meta = json.loads(info.read_text()) if info.exists() else {}
     short_fraction, lev = float(meta.get("short_fraction", 0.0)), float(meta.get("leverage", 1.0))
@@ -102,6 +103,6 @@ def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float
         plan["short_fraction"] = short_fraction
     if lev != 1.0:
         plan["leverage"] = lev
-    plan.update({"broker": "alpaca", "slot": str(slot), "tranche": SCH.tranche_of(slot), "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
+    plan.update({"broker": "alpaca", "decision_month": meta.get("decision_month"), "slot": str(slot), "tranche": SCH.tranche_of(slot), "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
                  "held": dict(held or {}), "held_source": "assumed empty (account not read)" if held is None else "given", "usd_total": round(sum(o["usd"] for o in plan["orders"]), 2)})
     return plan

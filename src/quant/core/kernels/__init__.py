@@ -62,6 +62,8 @@ def _load() -> ctypes.CDLL | None:
         why = f"no library at {path}"
     elif json.loads(stamp.read_text()).get("source_sha256") != source_hash():
         why = f"library at {path} was built from other rust_core sources (stale)"
+    elif json.loads(stamp.read_text()).get("library_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+        why = f"library at {path} is not the file its build stamp recorded (replaced or damaged): rebuild it"
     else:
         lib = ctypes.CDLL(str(path))
         lib.rc_abi_version.restype = ctypes.c_uint32

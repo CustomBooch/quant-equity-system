@@ -9,6 +9,7 @@ engine month minus 10 points (the quant.validation.audit_panel rule; correction 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,6 +22,7 @@ import pandas as pd
 from quant.core.frozen import assert_frozen_intact
 from quant.models import definition as LC
 from quant.core.paths import REPO
+from quant.core.sql import quote
 from quant.core.release import pointer as PT
 from quant.core.release import sha256_file, verify_release
 
@@ -31,8 +33,16 @@ PARITY_PREFIXES = ("est_parity_", "px_parity_", "ev_parity_", "sec_live_", "fill
 
 
 def month_rows(pq: Path, month: str) -> pd.DataFrame:
+    """The investable rows of decision month `month` (YYYY-MM-01; anything else is refused: it reaches the query as a bound parameter, never as SQL)."""
+    try:
+        valid = isinstance(month, str) and len(month) == 10 and month.endswith("-01") and dt.date.fromisoformat(month) is not None
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(f"decision month {month!r} is not YYYY-MM-01")
     cols = sorted(set(LC.FEATURES) | {"permno", "month", "me_lag", "price_lag"})
-    d = duckdb.connect().execute(f"SELECT {', '.join(cols)} FROM read_parquet('{pq.as_posix()}') WHERE in_investable AND month = DATE '{month}' ORDER BY permno").df()
+    d = duckdb.connect().execute(f"SELECT {', '.join(cols)} FROM read_parquet({quote(pq.as_posix())}) WHERE in_investable AND month = CAST(? AS DATE) ORDER BY permno",
+                                 [month]).df()
     d["month"] = pd.to_datetime(d["month"])
     return d
 

@@ -129,3 +129,11 @@ fn the_c_abi_reports_a_malformed_plan_and_a_small_buffer() {
     let mut n = 0usize;
     assert_eq!(unsafe { rc_paper_check(std::ptr::null(), 0, 0, std::ptr::null(), 0, std::ptr::null_mut(), 0, &mut n) }, -1);
 }
+
+#[test]
+fn an_order_value_that_is_zero_or_negative_is_malformed_whatever_its_quantity() {
+    for usd in [0.0, -500.0] {
+        let p = with_orders(vec![order("AAA", 100.0, usd, "BUY")], 13374.89);
+        assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["malformed orders: ['AAA']"], "usd {usd}");
+    }
+}
