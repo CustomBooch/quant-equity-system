@@ -223,27 +223,24 @@ pub fn pre_trade_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, 
 pub fn paper_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, owner_confirmed_hash: Option<&str>) -> Result<Vec<String>, String> {
     let mut reasons = pre_trade_checks(plan, kill_switch_on, preflight_go, owner_confirmed_hash)?;
     let orders = plan.get("orders").and_then(Value::as_arr).ok_or("plan lacks orders")?;
-    // PAPER amendment A10: a plan names its broker. Absent = the Trading 212 practice path (USD `_US_EQ` lines, checked above). "alpaca" = plain US
-    // symbols: the `_US_EQ` reason is replaced by the Alpaca line rule. Any other value is malformed.
-    match plan.get("broker") {
-        None => {}
-        Some(b) => match b.as_str() {
-            Some("t212") => {}
-            Some("alpaca") => {
-                reasons.retain(|r| !r.starts_with("non-USD instrument lines: "));
-                let mut bad = Vec::new();
-                for o in orders {
-                    let ticker = o.get("ticker").and_then(Value::as_str).ok_or("order lacks ticker")?;
-                    if !alpaca_symbol(ticker) {
-                        bad.push(ticker.to_string());
-                    }
-                }
-                if !bad.is_empty() {
-                    reasons.push(format!("not Alpaca US equity symbols: {}", repr_str_list(&bad)));
+    // PAPER amendments A10 and A14: a plan names its broker, and the only broker is "alpaca": plain US symbols, so the ported reference's
+    // instrument-line reason is replaced by the Alpaca symbol rule. A plan without the field, or naming any other broker, is an error (never sent).
+    match plan.get("broker").map(Value::as_str) {
+        Some(Some("alpaca")) => {
+            reasons.retain(|r| !r.starts_with("non-USD instrument lines: "));
+            let mut bad = Vec::new();
+            for o in orders {
+                let ticker = o.get("ticker").and_then(Value::as_str).ok_or("order lacks ticker")?;
+                if !alpaca_symbol(ticker) {
+                    bad.push(ticker.to_string());
                 }
             }
-            _ => return Err("plan names an unknown broker".into()),
-        },
+            if !bad.is_empty() {
+                reasons.push(format!("not Alpaca US equity symbols: {}", repr_str_list(&bad)));
+            }
+        }
+        None => return Err("plan names no broker (made before amendment A10): only alpaca exists".into()),
+        _ => return Err("plan names an unknown broker: only alpaca exists (amendment A14)".into()),
     }
     let account = plan.get("account_value_usd").and_then(Value::as_f64).ok_or("account_value_usd is not a number")?;
     if !account.is_finite() || account <= 0.0 {
@@ -273,7 +270,7 @@ pub fn paper_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, owne
         reasons.push("leverage above 1 needs the Alpaca margin account".into());
     }
     let lev_c = if leverage.is_finite() { leverage.clamp(1.0, MAX_GROSS / (1.0 + 2.0 * sf_c)) } else { 1.0 };
-    // Short-sale detection needs the tranche's holdings: every Alpaca plan records `held` (a plan without it is malformed); Trading 212 plans never short.
+    // Short-sale detection needs the tranche's holdings: every Alpaca plan records `held` (a plan without it is malformed).
     let alpaca = plan.get("broker").and_then(Value::as_str) == Some("alpaca");
     if alpaca && plan.get("held").is_none() {
         return Err("an Alpaca plan lacks held".into());

@@ -31,11 +31,11 @@ come with it. Walkthrough: [Adding a dataset](https://github.com/CustomBooch/qua
 | Layer | Package | Holds |
 | --- | --- | --- |
 | 0 | `quant.core` | paths, statistics (Newey-West, bootstraps, Holm), Rust kernels with bit-identical Python references, the release contract, licences |
-| 1 | `quant.data` | data-source plugins and store; SEC EDGAR, Yahoo, Capital IQ export readers, broker instrument lists |
+| 1 | `quant.data` | data-source plugins and store; SEC EDGAR, Yahoo, Capital IQ export readers, the Alpaca asset list |
 | 2 | `quant.features` | point-in-time monthly joins, price features from daily bars, the bridge-month fundamentals fill |
 | 3 | `quant.models` | scoring a verified release with the model definition, with input-coverage rails |
 | 4 | `quant.portfolio` | book parameters, target book, trend overlay, tranche schedule, order plan |
-| 5 | `quant.execution` | preflight, the engine (the only code that can send an order, and only with an owner token per plan), hash-chained audit log, tranche ledger, Alpaca and Trading 212 adapters |
+| 5 | `quant.execution` | preflight, the engine (the only code that can send an order, and only with an owner token per plan), hash-chained audit log, tranche ledger, the Alpaca adapter |
 | 6 | `quant.ops` | monitors |
 
 Layers import downwards only (`tools/check_layout.py`); the production commands load only production code (`tools/check_imports.py`).

@@ -1,5 +1,5 @@
-"""PAPER execution engine v1 (lab/paper/SPEC.md): the order path. Paper endpoints only: the Alpaca paper account (amendment A10, the broker in use) or the
-Trading 212 practice account (kept, unused). The one module that can send an order (tests/contracts/test_broker_boundary.py).
+"""PAPER execution engine v1 (lab/paper/SPEC.md): the order path. One endpoint only: the Alpaca paper account (amendment A10; amendment A14 retired
+the other broker path). The one module that can send an order (tests/contracts/test_broker_boundary.py).
 What to trade is planned by quant.portfolio.plan; this module checks a plan, sends it and reconciles it.
 
     python -m quant.execution.engine plan   TARGET.csv   -> lab/paper/plans/<plan_hash>.json   (quant.portfolio.plan.plan_from_target; the account is not read)
@@ -44,7 +44,6 @@ from quant.portfolio import schedule as SCH
 from quant.portfolio.broker import BROKER, MAX_GROSS, MAX_SHORT_FRAC, MAX_SHORT_LEG, SHORTS, usd_line
 from quant.portfolio.plan import QTY_DECIMALS, ROOT, book_exposure, plan_from_target, plan_hash, write_plan
 from quant.core.paths import REPO
-from quant.execution.brokers.t212.api import DEMO, auth, positions
 
 CONFIRM, KILL, LOCK = ROOT / "confirm", ROOT / "KILL", ROOT / "SEND.lock"
 PREFLIGHT = [sys.executable, "-m", "quant.execution.preflight"], REPO / "lab/ready/results/preflight.json"
@@ -72,13 +71,16 @@ def read_token(path: Path) -> str:
 
 
 def broker_of(plan: dict[str, Any]) -> str:
-    """The broker a plan was made for; a plan without the field predates amendment A10 and is a Trading 212 plan."""
-    broker: str = plan.get("broker", "t212")
+    """The broker a plan was made for; "" for a plan without the field (made before amendment A10), which the broker gate refuses."""
+    broker: str = plan.get("broker", "")
     return broker
 
 
 def broker_positions(broker: str) -> dict[str, float]:
-    return ALP.positions() if broker == "alpaca" else positions()
+    """The positions of the account the plan's broker names; only Alpaca exists (amendment A14)."""
+    if broker != "alpaca":
+        raise Refused(f"no account for broker {broker!r}: amendment A14 keeps only the Alpaca paper account")
+    return ALP.positions()
 
 
 def alpaca_tradable() -> set[str]:
@@ -148,7 +150,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
     made = [r for r in past if r["event"] == "plan"]
     if not made:
         raise Refused("no plan record for this hash in the audit log")
-    if made[0].get("broker", "t212") != b:
+    if made[0].get("broker", "") != b:
         raise Refused("the plan's broker differs from the one recorded when it was made")
     if (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(made[0]["utc"]) > MAX_PLAN_AGE:
         raise Refused(f"plan recorded {made[0]['utc']}, more than {MAX_PLAN_AGE.days} days ago: make a new plan at current prices")
@@ -169,30 +171,27 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"malformed orders: {bad or 'a ticker appears twice'}")
     if big := [o["ticker"] for o in orders if o["usd"] > MAX_ORDER_FRAC * acct]:
         raise Refused(f"orders above {MAX_ORDER_FRAC:.0%} of the account: {big}")
-    if other := [t for t in tickers if not usd_line(t, b)]:
-        raise Refused(f"non-USD lines: {other}")
-    if b == "alpaca":
-        try:
-            ok = alpaca_tradable()
-        except FileNotFoundError as e:
-            raise Refused(f"no Alpaca asset list to check the symbols against: {e}") from e
-        if missing := [t for t in tickers if t not in ok]:
-            raise Refused(f"symbols not active and tradable in the newest Alpaca asset list: {missing}")
+    if other := [t for t in tickers if not usd_line(t)]:
+        raise Refused(f"not Alpaca US symbols: {other}")
+    try:
+        ok = alpaca_tradable()
+    except FileNotFoundError as e:
+        raise Refused(f"no Alpaca asset list to check the symbols against: {e}") from e
+    if missing := [t for t in tickers if t not in ok]:
+        raise Refused(f"symbols not active and tradable in the newest Alpaca asset list: {missing}")
     sf = plan.get("short_fraction", 0.0)
     if not (isinstance(sf, (int, float)) and math.isfinite(sf) and 0.0 <= sf <= MAX_SHORT_FRAC):
         raise Refused(f"short_fraction {sf!r} outside [0, {MAX_SHORT_FRAC}]")
-    if sf > 0 and not (SHORTS and b == "alpaca"):
-        raise Refused("this plan shorts, but short selling is enabled only on the Alpaca path (amendment A11)")
+    if sf > 0 and not SHORTS:
+        raise Refused("this plan shorts, but short selling is not enabled (quant.portfolio.model, amendment A11)")
     lev = plan.get("leverage", 1.0)
     if not (isinstance(lev, (int, float)) and math.isfinite(lev) and lev >= 1.0 and lev * (1 + 2 * sf) <= MAX_GROSS + 1e-9):
         raise Refused(f"leverage {lev!r} outside [1, {MAX_GROSS} / (1 + 2 x short fraction)]")
-    if lev > 1.0 and b != "alpaca":
-        raise Refused("this plan is levered, but leverage is enabled only on the Alpaca margin account (amendment A12)")
     if (buys := sum(o["usd"] for o in orders if o["side"] == "BUY")) > acct * lev * (1 + sf):
         raise Refused(f"buys total {buys:,.2f} USD, more than the account's {acct:,.2f}" if not sf and lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than (1 + {sf}) x the account" if lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than {lev} x (1 + {sf}) x the account")
-    if b == "alpaca" and (ss := short_sales(plan)):
+    if ss := short_sales(plan):
         names = [o["ticker"] for o, _ in ss]
         if sf <= 0:
             raise Refused(f"short sales without a declared short fraction: {names}")
@@ -213,13 +212,6 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"Rust pre-trade check could not run: {e}") from e
     if rust:
         raise Refused(f"Rust pre-trade check: {'; '.join(rust)}")
-
-
-def http_post(path: str, body: dict[str, Any], auth: str) -> dict[str, Any]:
-    req = urllib.request.Request(DEMO + path, data=json.dumps(body).encode(), method="POST", headers={"Authorization": auth, "Content-Type": "application/json", "User-Agent": "quant-research-paper"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        answer: dict[str, Any] = json.loads(r.read())
-        return answer
 
 
 def qty_text(q: float) -> str:
@@ -301,12 +293,11 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             before = broker_positions(b)
         except Exception as e:  # noqa: BLE001 - without the positions before the batch it cannot be reconciled, so it is not sent
             raise Refused(f"positions could not be read: {e!r}"[:200]) from e
-        if b == "alpaca" and (late := auction_window_problem(CLOCK())):
+        if late := auction_window_problem(CLOCK()):
             raise Refused(late)
     except Refused as e:
         A.log("refused", plan_hash=h, reason=str(e))
         raise
-    full = auth("FULL") if b == "t212" else None
     A.log("send_started", plan_hash=h, token=str(CONFIRM / f"{h}.token"), orders=len(plan["orders"]), held_before=before, broker=b)
     out: list[dict[str, Any]] = []
     for i, o in enumerate(plan["orders"]):
@@ -314,11 +305,8 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             A.log("halted_by_kill_switch", plan_hash=h, sent=len(out))
             break
         try:
-            if b == "alpaca":
-                answers = send_alpaca_line(o, cast(str, h), i)
-                r: dict[str, Any] = answers[0] if len(answers) == 1 else {"orders": answers}
-            else:
-                r = http_post("/equity/orders/market", {"ticker": o["ticker"], "quantity": o["quantity"]}, cast(str, full))
+            answers = send_alpaca_line(o, cast(str, h), i)
+            r: dict[str, Any] = answers[0] if len(answers) == 1 else {"orders": answers}
             A.log("sent", plan_hash=h, order=o, response=r)
             out.append({"order": o, "response": r})
         except Exception as e:  # noqa: BLE001 - record and continue to the audit; no automatic retry

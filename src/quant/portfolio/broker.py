@@ -1,5 +1,5 @@
-"""Which broker the PAPER path uses (lab/paper/SPEC.md amendment A10, ratified 2026-11-12): the Alpaca paper account in USD. The Trading 212 practice
-path stays in the code, unused. Targets, preflight and the engine read this one setting; the engine refuses a plan made for any other broker."""
+"""The broker of the PAPER path (lab/paper/SPEC.md amendment A10, ratified 2026-11-12): the Alpaca paper account in USD, the only one since amendment A14.
+Targets, preflight and the engine read this one setting; the engine refuses a plan made for any other broker."""
 from __future__ import annotations
 
 import re
@@ -14,9 +14,11 @@ MAX_SHORT_LEG = 0.40                                        # A12 control: short
 _ALPACA = re.compile(r"[A-Z]{1,5}(\.[A-Z]{1,2})?")
 
 
-def line_column(broker: str) -> str:
-    """The target-book column that holds the broker's instrument line."""
-    return "line" if broker == "alpaca" else "t212"
+def line_column(broker: str = BROKER) -> str:
+    """The target-book column that holds the broker's instrument line (`line`: the Alpaca symbol)."""
+    if broker != "alpaca":
+        raise ValueError(f"unknown broker {broker!r}: only alpaca exists (amendment A14)")
+    return "line"
 
 
 def alpaca_symbol(s: str) -> bool:
@@ -24,5 +26,6 @@ def alpaca_symbol(s: str) -> bool:
     return bool(_ALPACA.fullmatch(s))
 
 
-def usd_line(ticker: str, broker: str) -> bool:
-    return alpaca_symbol(ticker) if broker == "alpaca" else ticker.endswith("_US_EQ")
+def usd_line(ticker: str) -> bool:
+    """Whether `ticker` is an Alpaca US equity symbol."""
+    return alpaca_symbol(ticker)

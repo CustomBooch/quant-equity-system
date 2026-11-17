@@ -1,7 +1,6 @@
 """quant.execution.engine: every send gate, the audit trail, reconciliation. Boundary replaced: the broker's HTTP (urlopen); the files go to tmp_path."""
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import io
 import json
@@ -17,10 +16,11 @@ from quant.execution import audit as A
 from quant.execution import engine as E
 from quant.execution import ledger as LG
 from quant.portfolio import plan as P
-from quant.execution.brokers.t212 import api
 
-PRICES = {"AAA_US_EQ": 50.0, "BBB_US_EQ": 20.0}
+PRICES = {"AAA": 50.0, "BBB": 20.0}
 AFTER_CUTOFF = dt.datetime(2026, 11, 17, 0, 5, tzinfo=dt.timezone.utc)          # Monday 19:05 in New York: queued for Tuesday's opening auction
+TRADABLE = {"AAA", "BBB", "BRK.B", *(f"T{c}" for c in "ABCDEFGHIJK")}
+PAPER = "https://paper-api.alpaca.markets"
 
 
 @pytest.fixture(autouse=True)
@@ -31,17 +31,18 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(LG, "LEDGER", tmp_path / "ledger.json")
     E.CONFIRM.mkdir()
-    LG.record_batch({}, 0, {"BBB_US_EQ": 4.0})                                  # tranche 0 holds the 4 BBB the sample plan sells
-    monkeypatch.setattr(E, "SEND_BROKER", "t212")                               # these tests exercise the Trading 212 path; TestAlpaca switches it
+    LG.record_batch({}, 0, {"BBB": 4.0})                                        # tranche 0 holds the 4 BBB the sample plan sells
+    monkeypatch.setattr(E, "SEND_BROKER", "alpaca")
+    monkeypatch.setattr(E, "alpaca_tradable", lambda: TRADABLE)                 # the newest asset list, replaced by a fixed set
     monkeypatch.setattr(E, "CLOCK", lambda: AFTER_CUTOFF)                       # a send time Alpaca accepts opening-auction orders at (A13)
+    monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "kid-x1")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET", "secret-x2")
 
 
 @pytest.fixture()
-def broker(tmp_path, monkeypatch):
-    """The practice API behind urlopen: GET positions answers `positions` (or raises it), each POST is recorded and raises for the tickers in `fail`."""
-    for k, v in {"T212_READ_API_KEY": "k1", "T212_READ_SECRET_KEY": "s1", "T212_FULL_API_KEY": "k2", "T212_FULL_SECRET_KEY": "s2"}.items():
-        monkeypatch.setenv(k, v)
-    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"ticker": "BBB_US_EQ", "quantity": 4.0}])
+def broker(monkeypatch):
+    """The Alpaca paper API behind urlopen: GET positions answers `positions` (or raises it), each POST is recorded and raises for the symbols in `fail`."""
+    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"symbol": "BBB", "qty": "4", "side": "long"}])
 
     def urlopen(req, timeout):
         if req.get_method() == "GET":
@@ -50,9 +51,9 @@ def broker(tmp_path, monkeypatch):
             return io.BytesIO(json.dumps(state.positions).encode())
         body = json.loads(req.data)
         state.requests.append((req, body))
-        if body["ticker"] in state.fail:
+        if body["symbol"] in state.fail:
             raise OSError("connection reset")
-        return io.BytesIO(json.dumps({"id": len(state.requests)}).encode())
+        return io.BytesIO(json.dumps({"id": f"o{len(state.requests)}", "status": "accepted"}).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     return state
@@ -60,7 +61,7 @@ def broker(tmp_path, monkeypatch):
 
 def plan(**kw):
     """Tranche 0 buys 10 AAA from nothing and sells the 4 BBB it holds: 500 and 80 USD on a 10,000 USD account. Not yet recorded."""
-    return {**P.make_plan({"AAA_US_EQ": 10.0, "BBB_US_EQ": 0.0}, {"BBB_US_EQ": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB_US_EQ": 4.0}}
+    return {**P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca"}
 
 
 def ready(p=None):
@@ -71,9 +72,12 @@ def ready(p=None):
     return p
 
 
-def hand_made(orders, account=10000.0):
-    """A plan whose orders were not produced by make_plan, hashed and recorded as the engine would."""
-    return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1, "held": {}})
+def hand_made(orders, account=10000.0, held=None):
+    """A plan whose orders were not produced by make_plan, hashed and recorded as the engine would (tranche 1, holding `held`)."""
+    if held:
+        LG.record_batch(LG.load(), 1, held)
+    return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1, "held": held or {},
+                  "broker": "alpaca"})
 
 
 def events():
@@ -114,6 +118,21 @@ class TestSendGates:
             E.send(p, True, sleep=0)
         assert broker.requests == []
 
+    def test_a_plan_that_names_no_broker_is_refused(self, broker):
+        p = plan()
+        del p["broker"]
+        with pytest.raises(E.Refused, match="plan is for broker ''"):
+            E.send(ready(p), True, sleep=0)
+        assert broker.requests == []
+
+    def test_a_plan_relabelled_after_it_was_recorded_is_refused(self, broker):
+        p = plan()
+        del p["broker"]
+        ready(p)                                                                    # recorded without a broker
+        p["broker"] = "alpaca"
+        with pytest.raises(E.Refused, match="differs from the one recorded"):
+            E.check_gates(p, True)
+
     def test_a_plan_recorded_more_than_four_days_ago_must_be_made_again(self):
         p = ready()
         made = dt.datetime.fromisoformat(A.records()[0]["utc"])
@@ -138,12 +157,12 @@ class TestSendGates:
         assert broker.requests == []
 
     @pytest.mark.parametrize("orders,msg", [
-        ([{"ticker": "A_US_EQ", "quantity": 1.0, "usd": 100.0, "side": "SELL"}], r"malformed orders: \['A_US_EQ'\]"),           # side disagrees with the sign
-        ([{"ticker": "A_US_EQ", "quantity": 0.0, "usd": 100.0, "side": "SELL"}], r"malformed orders: \['A_US_EQ'\]"),
-        ([{"ticker": "A_US_EQ", "quantity": 1.0, "usd": 100.0, "side": "BUY"}] * 2, "a ticker appears twice"),
-        ([{"ticker": "A_US_EQ", "quantity": 100.0, "usd": 10000.0, "side": "BUY"}], "above 10%"),
-        ([{"ticker": "A_EQ", "quantity": 1.0, "usd": 100.0, "side": "BUY"}], "non-USD"),
-        ([{"ticker": f"T{i}_US_EQ", "quantity": 1.0, "usd": 950.0, "side": "BUY"} for i in range(11)], "buys total 10,450.00 USD, more than the account's 10,000.00"),
+        ([{"ticker": "AAA", "quantity": 1.0, "usd": 100.0, "side": "SELL"}], r"malformed orders: \['AAA'\]"),           # side disagrees with the sign
+        ([{"ticker": "AAA", "quantity": 0.0, "usd": 100.0, "side": "SELL"}], r"malformed orders: \['AAA'\]"),
+        ([{"ticker": "AAA", "quantity": 1.0, "usd": 100.0, "side": "BUY"}] * 2, "a ticker appears twice"),
+        ([{"ticker": "AAA", "quantity": 100.0, "usd": 10000.0, "side": "BUY"}], "above 10%"),
+        ([{"ticker": "AAA_EQ", "quantity": 1.0, "usd": 100.0, "side": "BUY"}], r"not Alpaca US symbols: \['AAA_EQ'\]"),
+        ([{"ticker": f"T{c}", "quantity": 1.0, "usd": 950.0, "side": "BUY"} for c in "ABCDEFGHIJK"], "buys total 10,450.00 USD, more than the account's 10,000.00"),
     ])
     def test_an_order_set_outside_the_size_and_form_rules_is_refused(self, broker, orders, msg):
         p = hand_made(orders)
@@ -152,7 +171,8 @@ class TestSendGates:
         assert broker.requests == []
 
     def test_sells_do_not_count_toward_the_buy_limit(self):
-        E.check_gates(hand_made([{"ticker": f"T{i}_US_EQ", "quantity": -1.0, "usd": 950.0, "side": "SELL"} for i in range(11)]), True)
+        names = [f"T{c}" for c in "ABCDEFGHIJK"]
+        E.check_gates(hand_made([{"ticker": t, "quantity": -1.0, "usd": 950.0, "side": "SELL"} for t in names], held={t: 1.0 for t in names}), True)
 
     def test_a_batch_whose_positions_cannot_be_read_first_is_refused_and_audited(self, broker):
         p = ready()
@@ -166,8 +186,8 @@ class TestRustGate:
     """Amendment A7: rust_core's pre-trade check runs last, in-process, and the plan is refused if it objects or cannot run."""
 
     def test_an_order_value_that_is_not_a_number_passes_the_python_gates_but_rust_refuses_it(self, broker):
-        p = hand_made([{"ticker": "A_US_EQ", "quantity": 1.0, "usd": float("nan"), "side": "BUY"}])
-        with pytest.raises(E.Refused, match=r"Rust pre-trade check: orders above 10% of the account: \['A_US_EQ'\]; malformed orders: \['A_US_EQ'\]"):
+        p = hand_made([{"ticker": "AAA", "quantity": 1.0, "usd": float("nan"), "side": "BUY"}])
+        with pytest.raises(E.Refused, match=r"Rust pre-trade check: orders above 10% of the account: \['AAA'\]; malformed orders: \['AAA'\]"):
             E.send(p, True, sleep=0)
         assert broker.requests == [] and events()[-1] == "refused" and A.records()[-1]["reason"].startswith("Rust pre-trade check")
 
@@ -204,31 +224,32 @@ class TestOneSendAtATime:
 
 
 class TestSend:
-    def test_a_confirmed_plan_posts_market_orders_to_the_practice_host_with_the_full_keys(self, broker):
+    def test_a_confirmed_plan_posts_market_on_open_orders_to_the_paper_host_with_its_keys(self, broker):
         p = ready()
         out = E.send(p, True, sleep=0)
-        assert [b for _, b in broker.requests] == [{"ticker": "AAA_US_EQ", "quantity": 10.0}, {"ticker": "BBB_US_EQ", "quantity": -4.0}]
+        bodies = [b for _, b in broker.requests]
+        assert [(b["symbol"], b["qty"], b["side"], b["type"], b["time_in_force"]) for b in bodies] == [("AAA", "10", "buy", "market", "opg"), ("BBB", "4", "sell", "market", "opg")]
+        assert [b["client_order_id"] for b in bodies] == [f"{p['plan_hash'][:24]}-0", f"{p['plan_hash'][:24]}-1"]
         for req, _ in broker.requests:
-            assert req.full_url == "https://demo.trading212.com/api/v0/equity/orders/market" and req.get_method() == "POST"
-            assert req.get_header("Authorization") == "Basic " + base64.b64encode(b"k2:s2").decode()
-        assert [r["response"]["id"] for r in out] == [1, 2] and events() == ["plan", "send_started", "sent", "sent", "send_finished"]
+            assert req.full_url == f"{PAPER}/v2/orders" and req.get_method() == "POST" and req.get_header("Apca-api-key-id") == "kid-x1"
+        assert [r["response"]["id"] for r in out] == ["o1", "o2"] and events() == ["plan", "send_started", "sent", "sent", "send_finished"]
 
     def test_the_batch_record_holds_the_token_and_the_positions_before_the_first_order(self, broker):
         p = ready()
         E.send(p, True, sleep=0)
         started, finished = A.records()[1], A.records()[-1]
-        assert started["token"] == str(E.CONFIRM / f"{p['plan_hash']}.token") and started["held_before"] == {"BBB_US_EQ": 4.0}
+        assert started["token"] == str(E.CONFIRM / f"{p['plan_hash']}.token") and started["held_before"] == {"BBB": 4.0} and started["broker"] == "alpaca"
         assert (finished["accepted"], finished["errors"], finished["not_attempted"]) == (2, 0, 0)
 
     def test_no_api_key_or_secret_reaches_the_audit_log(self, broker):
         E.send(ready(), True, sleep=0)
-        assert not any(k in A.PATH.read_text() for k in ("k1", "s1", "k2", "s2", api.auth("FULL"), api.auth("READ")))
+        assert not any(k in A.PATH.read_text() for k in ("kid-x1", "secret-x2"))
 
     def test_an_order_that_fails_is_audited_and_the_batch_continues_without_retrying(self, broker):
         p = ready()
-        broker.fail = {"AAA_US_EQ"}
+        broker.fail = {"AAA"}
         out = E.send(p, True, sleep=0)
-        assert "connection reset" in out[0]["error"] and out[1]["response"] == {"id": 2}
+        assert "connection reset" in out[0]["error"] and out[1]["response"]["id"] == "o2"
         assert len(broker.requests) == 2 and events() == ["plan", "send_started", "error", "sent", "send_finished"]
 
     def test_the_kill_switch_stops_the_batch_between_orders(self, broker, monkeypatch):
@@ -248,18 +269,18 @@ class TestSend:
 class TestReconcile:
     def test_positions_that_differ_from_before_plus_orders_are_reported(self):
         orders = plan()["orders"]
-        assert E.reconcile("h", orders, {"BBB_US_EQ": 4.0}, {"AAA_US_EQ": 10.0}) == []
-        diffs = E.reconcile("h", orders, {"BBB_US_EQ": 4.0}, {"AAA_US_EQ": 10.0, "BBB_US_EQ": 4.0})       # the BBB sale did not happen
-        assert diffs == [{"ticker": "BBB_US_EQ", "expected": 0.0, "actual": 4.0, "diff": 4.0}] and events()[-1] == "reconciled"
+        assert E.reconcile("h", orders, {"BBB": 4.0}, {"AAA": 10.0}) == []
+        diffs = E.reconcile("h", orders, {"BBB": 4.0}, {"AAA": 10.0, "BBB": 4.0})       # the BBB sale did not happen
+        assert diffs == [{"ticker": "BBB", "expected": 0.0, "actual": 4.0, "diff": 4.0}] and events()[-1] == "reconciled"
 
     def test_a_sent_plan_is_reconciled_from_its_record_against_the_orders_the_broker_accepted(self, broker):
         p = ready()
-        broker.fail = {"AAA_US_EQ"}
+        broker.fail = {"AAA"}
         E.send(p, True, sleep=0)
         broker.positions = []                                                    # the BBB sale filled; the failed AAA buy is an error, not a difference
         assert E.reconcile_sent(p) == []
-        broker.positions = [{"ticker": "AAA_US_EQ", "quantity": 10.0}]
-        assert E.reconcile_sent(p) == [{"ticker": "AAA_US_EQ", "expected": 0.0, "actual": 10.0, "diff": 10.0}]
+        broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]
+        assert E.reconcile_sent(p) == [{"ticker": "AAA", "expected": 0.0, "actual": 10.0, "diff": 10.0}]
 
     def test_a_plan_that_was_never_sent_cannot_be_reconciled(self, broker):
         with pytest.raises(E.Refused, match="never sent"):
@@ -309,8 +330,8 @@ class TestCommands:
         p = ready()
         preflight(0)
         f = str(P.PLANS / f"{p['plan_hash']}.json")
-        assert E.main(["send", f]) == 0 and [b["ticker"] for _, b in broker.requests] == ["AAA_US_EQ", "BBB_US_EQ"]
-        broker.positions = [{"ticker": "AAA_US_EQ", "quantity": 10.0}]                 # both orders filled
+        assert E.main(["send", f]) == 0 and [b["symbol"] for _, b in broker.requests] == ["AAA", "BBB"]
+        broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]                 # both orders filled
         capsys.readouterr()
         assert E.main(["reconcile", f]) == 0 and json.loads(capsys.readouterr().out) == []
 
@@ -334,14 +355,14 @@ class TestTrancheLedger:
     def test_a_clean_reconciliation_records_the_tranches_new_holdings(self, broker):
         p = ready()
         E.send(p, True, sleep=0)
-        broker.positions = [{"ticker": "AAA_US_EQ", "quantity": 10.0}]                 # both orders filled
-        assert E.reconcile_sent(p) == [] and LG.tranche(LG.load(), 0) == {"AAA_US_EQ": 10.0} and events()[-1] == "ledger_updated"
+        broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]                 # both orders filled
+        assert E.reconcile_sent(p) == [] and LG.tranche(LG.load(), 0) == {"AAA": 10.0} and events()[-1] == "ledger_updated"
 
     def test_a_reconciliation_with_differences_leaves_the_ledger_and_blocks_the_tranche(self, broker):
         p = ready()
         E.send(p, True, sleep=0)
-        broker.positions = [{"ticker": "AAA_US_EQ", "quantity": 7.0}]                  # a partial fill
-        assert E.reconcile_sent(p) != [] and LG.tranche(LG.load(), 0) == {"BBB_US_EQ": 4.0}
+        broker.positions = [{"symbol": "AAA", "qty": "7", "side": "long"}]                  # a partial fill
+        assert E.reconcile_sent(p) != [] and LG.tranche(LG.load(), 0) == {"BBB": 4.0}
         assert E.unsettled(0) == p["plan_hash"] and E.unsettled(1) is None
 
     def test_another_plan_of_an_unsettled_tranche_is_refused_until_the_last_batch_reconciles(self, broker):
@@ -350,7 +371,7 @@ class TestTrancheLedger:
         second = ready(plan(tranche_fraction=0.5))
         with pytest.raises(E.Refused, match="has not reconciled"):
             E.send(second, True, sleep=0)
-        broker.positions = [{"ticker": "AAA_US_EQ", "quantity": 10.0}]
+        broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]
         E.reconcile_sent(first)                                                         # settled: the tranche now holds 10 AAA, not the 4 BBB the second plan assumed
         with pytest.raises(E.Refused, match="holdings changed since the plan"):
             E.send(second, True, sleep=0)
@@ -358,13 +379,13 @@ class TestTrancheLedger:
 
     def test_the_plan_command_starts_from_the_ledger_and_the_books_overlay(self, tmp_path, yahoo, broker, capsys):
         book = tmp_path / "book.csv"
-        pd.DataFrame({"t212": ["AAA_US_EQ", "BBB_US_EQ"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(book, index=False)
+        pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(book, index=False)
         book.with_suffix(".json").write_text(json.dumps({"overlay_state": {"exposure_now": 0.5}}))
         assert E.main(["plan", str(book), "--account-usd", "10000", "--slot", "2026-11-24"]) == 0     # ISO week 48: tranche 0, which holds 4 BBB
         p = json.loads(next(P.PLANS.glob("*.json")).read_text())
-        assert (p["tranche"], p["held"], p["exposure"], p["exposure_source"], p["held_source"]) == (0, {"BBB_US_EQ": 4.0}, 0.5, "target book overlay state", "ledger, tranche 0")
-        assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"AAA_US_EQ": 15.0, "BBB_US_EQ": 21.0}     # 1250 USD: 750 / 50 = 15 AAA; 500 / 20 = 25 BBB, 4 held
-        assert broker.requests == []
+        assert (p["tranche"], p["held"], p["exposure"], p["exposure_source"], p["held_source"]) == (0, {"BBB": 4.0}, 0.5, "target book overlay state", "ledger, tranche 0")
+        assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"AAA": 15.0, "BBB": 21.0}     # 1250 USD: 750 / 50 = 15 AAA; 500 / 20 = 25 BBB, 4 held
+        assert p["broker"] == "alpaca" and broker.requests == []
 
     def test_the_plan_command_refuses_a_tranche_whose_last_batch_is_unsettled(self, tmp_path, broker, capsys):
         E.send(ready(), True, sleep=0)
@@ -391,54 +412,16 @@ class TestToken:
         assert broker.requests == [] and events()[-1] == "refused"
 
 
-
 class TestAlpaca:
-    """Amendment A10: the same gates and audit on the Alpaca paper account. HTTP replaced at urlopen; the asset list is replaced by a fixed set."""
+    """Amendment A10 specifics: the asset list, the opening-auction orders (A13) and their fallback. HTTP replaced at urlopen."""
 
     @pytest.fixture()
-    def alp(self, monkeypatch):
-        monkeypatch.setattr(E, "SEND_BROKER", "alpaca")
-        monkeypatch.setattr(E, "alpaca_tradable", lambda: {"AAA", "BBB", "BRK.B"})
-        monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "kid")
-        monkeypatch.setenv("ALPACA_PAPER_SECRET", "sec")
-        LG.record_batch(LG.load(), 0, {"BBB": 4.0})
-        state = types.SimpleNamespace(requests=[], positions=[{"symbol": "BBB", "qty": "4", "side": "long"}])
-
-        def urlopen(req, timeout):
-            if req.get_method() == "GET":
-                assert req.full_url == "https://paper-api.alpaca.markets/v2/positions"
-                return io.BytesIO(json.dumps(state.positions).encode())
-            state.requests.append((req, json.loads(req.data)))
-            return io.BytesIO(json.dumps({"id": f"o{len(state.requests)}", "status": "accepted"}).encode())
-
-        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-        return state
+    def alp(self, broker):
+        return broker
 
     @staticmethod
     def alpaca_plan():
-        p = P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, {"AAA": 50.0, "BBB": 20.0}, 10000.0)
-        return ready({**p, "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca"})
-
-    def test_a_confirmed_alpaca_plan_posts_market_on_open_orders_to_the_paper_host(self, alp):
-        p = self.alpaca_plan()
-        E.send(p, True, sleep=0)
-        bodies = [b for _, b in alp.requests]
-        assert [(b["symbol"], b["qty"], b["side"], b["type"], b["time_in_force"]) for b in bodies] == [("AAA", "10", "buy", "market", "opg"), ("BBB", "4", "sell", "market", "opg")]
-        assert [b["client_order_id"] for b in bodies] == [f"{p['plan_hash'][:24]}-0", f"{p['plan_hash'][:24]}-1"]
-        for req, _ in alp.requests:
-            assert req.full_url == "https://paper-api.alpaca.markets/v2/orders" and req.get_header("Apca-api-key-id") == "kid"
-        assert "sec" not in A.PATH.read_text() and A.records()[1]["broker"] == "alpaca"
-
-    def test_a_trading_212_plan_is_refused_while_alpaca_is_the_broker(self, alp):
-        with pytest.raises(E.Refused, match="sends only to 'alpaca'"):
-            E.send(ready(), True, sleep=0)
-        assert alp.requests == []
-
-    def test_a_plan_relabelled_after_it_was_recorded_is_refused(self, alp):
-        p = ready()                                                                 # recorded as a Trading 212 plan
-        p["broker"] = "alpaca"
-        with pytest.raises(E.Refused, match="differs from the one recorded"):
-            E.check_gates(p, True)
+        return ready()
 
     def test_a_symbol_missing_from_the_asset_list_is_refused(self, alp, monkeypatch):
         monkeypatch.setattr(E, "alpaca_tradable", lambda: {"BBB"})
@@ -452,12 +435,6 @@ class TestAlpaca:
         with pytest.raises(E.Refused, match="no Alpaca asset list"):
             E.send(self.alpaca_plan(), True, sleep=0)
         assert alp.requests == []
-
-    def test_a_trading_212_line_in_an_alpaca_plan_is_refused(self, alp):
-        orders = [{"ticker": "AAA_US_EQ", "quantity": 1.0, "usd": 50.0, "side": "BUY"}]
-        p = ready({"orders": orders, "skipped": [], "account_value_usd": 10000.0, "plan_hash": P.plan_hash(orders, 10000.0), "tranche": 1, "held": {}, "broker": "alpaca"})
-        with pytest.raises(E.Refused, match="non-USD lines"):
-            E.check_gates(p, True)
 
     def test_reconciliation_reads_alpaca_positions(self, alp):
         p = self.alpaca_plan()
@@ -533,8 +510,8 @@ class TestShortSales:
         monkeypatch.setattr(E, "SEND_BROKER", "alpaca")
         monkeypatch.setattr(E, "alpaca_tradable", lambda: {"AAA", "ZZZ", "HTB"})
         monkeypatch.setattr(E, "alpaca_shortable", lambda: {"AAA", "ZZZ"})
-        monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "kid")
-        monkeypatch.setenv("ALPACA_PAPER_SECRET", "sec")
+        monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "kid-x1")
+        monkeypatch.setenv("ALPACA_PAPER_SECRET", "secret-x2")
         state = types.SimpleNamespace(requests=[])
 
         def urlopen(req, timeout):

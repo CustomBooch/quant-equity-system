@@ -10,9 +10,20 @@ fn m(kv: &[(&str, f64)]) -> BTreeMap<String, f64> {
     kv.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
+/// The plan made for the Alpaca paper account (amendments A10 and A14: the only broker), holding enough of each name it sells that no sale is a short sale.
+fn alpaca(mut p: Value) -> Value {
+    let sold: Vec<(String, Value)> = p.get("orders").and_then(Value::as_arr).unwrap_or(&[]).iter()
+        .filter_map(|o| o.get("ticker").and_then(Value::as_str)).map(|t| (t.to_string(), Value::Float(1e9))).collect();
+    if let Value::Obj(kv) = &mut p {
+        kv.push(("broker".to_string(), Value::Str("alpaca".into())));
+        kv.push(("held".to_string(), Value::Obj(sold)));
+    }
+    p
+}
+
 /// A valid plan: one buy, one sell, well under every cap, hash recorded by `make_plan`.
 fn plan() -> Value {
-    make_plan(&m(&[("AAA_US_EQ", 10.0), ("BBB_US_EQ", 0.0)]), &m(&[("BBB_US_EQ", 4.0)]), &m(&[("AAA_US_EQ", 50.0), ("BBB_US_EQ", 100.0)]), &Value::Float(13374.89), 1.0)
+    alpaca(make_plan(&m(&[("AAA", 10.0), ("BBB", 0.0)]), &m(&[("BBB", 4.0)]), &m(&[("AAA", 50.0), ("BBB", 100.0)]), &Value::Float(13374.89), 1.0))
 }
 
 fn hash(p: &Value) -> String {
@@ -23,7 +34,7 @@ fn hash(p: &Value) -> String {
 fn with_orders(orders: Vec<Value>, account: f64) -> Value {
     let acct = Value::Float(account);
     let h = plan_hash(&orders, &acct);
-    Value::obj([("orders", Value::Arr(orders)), ("skipped", Value::Arr(vec![])), ("account_value_usd", acct), ("plan_hash", Value::Str(h))])
+    alpaca(Value::obj([("orders", Value::Arr(orders)), ("skipped", Value::Arr(vec![])), ("account_value_usd", acct), ("plan_hash", Value::Str(h))]))
 }
 
 fn order(t: &str, q: f64, usd: f64, side: &str) -> Value {
@@ -46,42 +57,42 @@ fn the_ported_checks_still_apply_and_fail_closed_by_default() {
 
 #[test]
 fn a_quantity_whose_sign_disagrees_with_its_side_is_malformed() {
-    let p = with_orders(vec![order("AAA_US_EQ", 2.0, 100.0, "SELL"), order("BBB_US_EQ", -1.0, 100.0, "SELL")], 13374.89);
-    assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["malformed orders: ['AAA_US_EQ']"]);
+    let p = with_orders(vec![order("AAA", 2.0, 100.0, "SELL"), order("BBB", -1.0, 100.0, "SELL")], 13374.89);
+    assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["malformed orders: ['AAA']"]);
 }
 
 #[test]
 fn zero_and_non_finite_quantities_and_values_are_malformed() {
     let p = with_orders(
-        vec![order("AAA_US_EQ", 0.0, 0.0, "SELL"), order("BBB_US_EQ", f64::NAN, 10.0, "SELL"), order("CCC_US_EQ", 1.0, f64::INFINITY, "BUY")],
+        vec![order("AAA", 0.0, 0.0, "SELL"), order("BBB", f64::NAN, 10.0, "SELL"), order("CCC", 1.0, f64::INFINITY, "BUY")],
         13374.89,
     );
     let r = paper_checks(&p, false, true, Some(&hash(&p))).unwrap();
-    assert!(r.contains(&"malformed orders: ['AAA_US_EQ', 'BBB_US_EQ', 'CCC_US_EQ']".to_string()), "{r:?}");
+    assert!(r.contains(&"malformed orders: ['AAA', 'BBB', 'CCC']".to_string()), "{r:?}");
 }
 
 #[test]
 fn a_ticker_listed_twice_is_refused() {
-    let p = with_orders(vec![order("AAA_US_EQ", 1.0, 50.0, "BUY"), order("AAA_US_EQ", 1.0, 50.0, "BUY")], 13374.89);
-    assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["tickers that appear twice: ['AAA_US_EQ']"]);
+    let p = with_orders(vec![order("AAA", 1.0, 50.0, "BUY"), order("AAA", 1.0, 50.0, "BUY")], 13374.89);
+    assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["tickers that appear twice: ['AAA']"]);
 }
 
 #[test]
 fn buys_above_the_account_are_refused_even_when_each_is_under_its_cap() {
-    let orders: Vec<Value> = (0..11).map(|i| order(&format!("T{i:02}_US_EQ"), 1.0, 99.0, "BUY")).collect();
+    let orders: Vec<Value> = (0..11).map(|i| order(&format!("T{}", (b'A' + i as u8) as char), 1.0, 99.0, "BUY")).collect();
     let p = with_orders(orders, 1000.0);
     assert_eq!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap(), vec!["buys total 1089.00 USD, more than the account's 1000.00"]);
 }
 
 #[test]
 fn sells_do_not_count_towards_the_buy_total() {
-    let p = with_orders(vec![order("AAA_US_EQ", -5.0, 99.0, "SELL"), order("BBB_US_EQ", 1.0, 99.0, "BUY")], 1000.0);
+    let p = with_orders(vec![order("AAA", -5.0, 99.0, "SELL"), order("BBB", 1.0, 99.0, "BUY")], 1000.0);
     assert!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap().is_empty());
 }
 
 #[test]
 fn a_missing_field_or_a_bad_account_is_an_error_not_a_pass() {
-    let p = with_orders(vec![Value::obj([("ticker", Value::Str("AAA_US_EQ".into())), ("quantity", Value::Float(1.0)), ("usd", Value::Float(5.0))])], 1000.0);
+    let p = with_orders(vec![Value::obj([("ticker", Value::Str("AAA".into())), ("quantity", Value::Float(1.0)), ("usd", Value::Float(5.0))])], 1000.0);
     assert!(paper_checks(&p, false, true, Some(&hash(&p))).unwrap_err().contains("side"));
     for acct in [0.0, f64::NAN, -5.0] {
         let q = with_orders(vec![], acct);

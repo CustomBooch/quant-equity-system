@@ -21,12 +21,12 @@ def test_overlay_exposure_is_the_defensive_level_below_trend_and_full_otherwise(
 
 
 def test_tranche_targets_use_a_quarter_of_the_account_times_exposure():
-    t = S.tranche_target_shares({"A_US_EQ": 0.6, "B_US_EQ": 0.4}, {"A_US_EQ": 10.0, "B_US_EQ": 20.0}, 10000.0, 0.5)   # exposure passed explicitly
-    assert t == {"A_US_EQ": 75.0, "B_US_EQ": 25.0}                               # 10000/4*0.5 = 1250; 0.6*1250/10, 0.4*1250/20
+    t = S.tranche_target_shares({"A": 0.6, "B": 0.4}, {"A": 10.0, "B": 20.0}, 10000.0, 0.5)   # exposure passed explicitly
+    assert t == {"A": 75.0, "B": 25.0}                               # 10000/4*0.5 = 1250; 0.6*1250/10, 0.4*1250/20
 
 
 def test_slot_trade_is_the_change_of_that_tranche_only():
-    old = {"A_US_EQ": 10.0}
-    new = S.tranche_target_shares({"A_US_EQ": 0.5, "B_US_EQ": 0.5}, {"A_US_EQ": 50.0, "B_US_EQ": 50.0}, 10000.0, 1.0)
-    p = P.make_plan(new, old, {"A_US_EQ": 50.0, "B_US_EQ": 50.0}, 10000.0)
-    assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"A_US_EQ": 15.0, "B_US_EQ": 25.0}
+    old = {"A": 10.0}
+    new = S.tranche_target_shares({"A": 0.5, "B": 0.5}, {"A": 50.0, "B": 50.0}, 10000.0, 1.0)
+    p = P.make_plan(new, old, {"A": 50.0, "B": 50.0}, 10000.0)
+    assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"A": 15.0, "B": 25.0}

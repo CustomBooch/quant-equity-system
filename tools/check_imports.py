@@ -20,8 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ROOTS = ("quant.features.ciqfill.assemble", "quant.core.release.pointer", "quant.validation.audit_panel", "quant.models.scores", "quant.portfolio.targets",
-         "quant.execution.engine", "quant.execution.preflight", "quant.execution.brokers.t212.pull_instruments", "quant.execution.brokers.alpaca.pull_assets", "quant.core.kernels",
-         "quant.execution.brokers.t212.pull", "quant.execution.brokers.t212.reconcile", "quant.execution.brokers.t212.fills", "quant.execution.brokers.t212.health",   # the Trading 212 read layer's commands
+         "quant.execution.engine", "quant.execution.preflight", "quant.execution.brokers.alpaca.pull_assets", "quant.core.kernels",
          "quant.ops.borrow_watch", "quant.portfolio.shadow", "quant.ops.month", "quant.ops.forward")                # monthly monitors, the cycle, the forward ledger
 ALLOWED = ("quant", "quant.core", "quant.core.*", "quant.data", "quant.data.*", "quant.features", "quant.features.*", "quant.models", "quant.models.*",
            "quant.portfolio", "quant.portfolio.*", "quant.execution", "quant.execution.*", "quant.ops", "quant.ops.*",

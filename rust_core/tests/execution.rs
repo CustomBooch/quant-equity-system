@@ -220,14 +220,15 @@ fn an_alpaca_plan_of_valid_symbols_passes_and_bad_symbols_are_named() {
 }
 
 #[test]
-fn a_t212_plan_still_needs_usd_lines_and_an_unknown_broker_is_malformed() {
+fn a_plan_for_any_broker_but_alpaca_or_for_none_is_an_error() {
     use rust_core::execution::paper_checks;
-    let p = alpaca_plan(&["AAPL"], "t212");
-    let h = p.get("plan_hash").unwrap().as_str().unwrap().to_string();
-    assert_eq!(paper_checks(&p, false, true, Some(&h)).unwrap(), vec!["non-USD instrument lines: ['AAPL']".to_string()]);
-    let q = alpaca_plan(&["AAPL"], "ibkr");
-    let hq = q.get("plan_hash").unwrap().as_str().unwrap().to_string();
-    assert!(paper_checks(&q, false, true, Some(&hq)).is_err());
+    for broker in ["ibkr", "other"] {
+        let q = alpaca_plan(&["AAPL"], broker);
+        let hq = q.get("plan_hash").unwrap().as_str().unwrap().to_string();
+        assert!(paper_checks(&q, false, true, Some(&hq)).unwrap_err().contains("unknown broker"), "{broker}");
+    }
+    let none = parse("{\"orders\": [], \"account_value_usd\": 100, \"plan_hash\": \"x\"}").unwrap();
+    assert!(paper_checks(&none, false, true, Some("x")).unwrap_err().contains("names no broker"));
 }
 
 fn signed_plan(orders: &[(&str, f64, f64)], held: &[(&str, f64)], short_fraction: Option<f64>) -> (Value, String) {

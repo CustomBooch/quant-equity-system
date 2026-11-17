@@ -1,5 +1,5 @@
 """Append-only, hash-chained JSON lines: the one implementation of the record format of the PAPER audit log (src/quant/execution/audit.py), the experiment registry
-(src/quant/core/registry/store.py) and the Trading 212 read journal (quant.execution.brokers.t212.journal).
+(src/quant/core/registry/store.py).
 
 Each line is one JSON object carrying `prev`, the SHA-256 of the line before it (null on the first line), so an edited, inserted, reordered or deleted line
 breaks the chain at that line or the next. The SHA-256 of a line is the record's identity. Lines are appended and forced to disk before `append` returns, and

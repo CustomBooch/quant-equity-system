@@ -20,7 +20,7 @@ def broker_writes(source: str) -> list[str]:
     found = []
     for n in ast.walk(ast.parse(source)):
         if isinstance(n, ast.Constant) and isinstance(n.value, str) and "/orders" in n.value and ("equity" in n.value or "/v2/orders" in n.value):
-            found.append(f"{n.lineno}: order endpoint {n.value!r}")          # Trading 212 `.../equity/orders/...`; Alpaca `/v2/orders` (amendment A10)
+            found.append(f"{n.lineno}: order endpoint {n.value!r}")          # any `.../equity/orders/...` endpoint, and Alpaca's `/v2/orders` (amendment A10)
         if not isinstance(n, ast.Call):
             continue
         name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
@@ -57,7 +57,7 @@ def test_no_module_but_the_engine_can_send_to_the_broker():
 def test_the_loopback_exemption_holds_only_while_every_url_is_on_this_machine():
     assert all(only_loopback((REPO / rel).read_text(encoding="utf-8")) for rel in LOOPBACK_ONLY)
     assert only_loopback('URL = "http://127.0.0.1:11434/api/generate"\n')
-    assert not only_loopback('URL = "http://127.0.0.1:11434/api/generate"\nOTHER = "https://live.trading212.com/api/v0"\n')
+    assert not only_loopback('URL = "http://127.0.0.1:11434/api/generate"\nOTHER = "https://api.alpaca.markets/v2"\n')
     assert not only_loopback('x = 1\n')                                           # no URL at all: the URL may come from outside, so no exemption
 
 

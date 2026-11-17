@@ -31,7 +31,7 @@ class Source:
 SOURCES: tuple[Source, ...] = (                # the sources the public edition has code for; record the terms of each source you add
     Source("Capital IQ", UNCONFIRMED, True, "your own Capital IQ terms", ("quant.data.capiq", "quant.features.ciqfill"), "exports read from files you download"),
     Source("Yahoo Finance (bars, analyst snapshots)", UNCONFIRMED, True, "Yahoo's terms of service", ("quant.data.yahoo", "quant.data.free.archive"), "check the terms before any real-money use"),
-    Source("Broker instrument lists (Alpaca, Trading 212)", YES, True, "the broker's own account terms", ("quant.data.instruments",)),
+    Source("Broker instrument list (Alpaca)", YES, True, "the broker's own account terms", ("quant.data.instruments",)),
     Source("SEC EDGAR", YES, False, "sec.gov public filings; contact address from the environment only", ("quant.data.sec",)),
     Source("Data source framework", YES, False, "no data of its own: pulls, checks and stores what the plugins fetch", ("quant.data.sources",)),
 )

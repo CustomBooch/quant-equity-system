@@ -1,6 +1,6 @@
-"""PAPER target book from the live scores (dry run, no account or broker access). python -m quant.portfolio.targets [--score EXAMPLE] [--aum-gbp 10000]
-Initial holdings from the live scores of the newest live table: entry above the 90th percentile, value weights (Yahoo market cap), 10% cap, mapped to Trading 212 USD lines,
-shares at Yahoo's last price, converted from the account's GBP value at Yahoo's GBPUSD rate. Writes lab/paper/results/target_book_<score>.csv and .json. The overlay state (T1) is reported, not applied.
+"""PAPER target book from the scores (dry run, no account or broker access). python -m quant.portfolio.targets [--score EXAMPLE] [--aum-usd 100000]
+The model's long book (quant.portfolio.model) from the newest scores, mapped to Alpaca symbols, shares at Yahoo's last price for the account value in USD, plus the
+short leg (amendment A11) and both legs levered (A12). Writes lab/paper/results/target_book_<score>_<policy>_master_<month>_alpaca.csv and .json; the overlay state is reported.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from quant.portfolio.plan import MIN_ORDER_USD, QTY_DECIMALS          # the orde
 from quant.core.paths import REPO, YAHOO_DAILY
 from quant.portfolio.broker import BROKER, SHORTS, line_column
 from quant.portfolio.model import leverage, long_policy
-from quant.data.instruments import t212 as M
+from quant.data.instruments.crsp import crsp_ids
 
 RES = REPO / "lab/paper/results"
 POLICIES = {"vw90": {"entry": 0.90, "exit": 0.70, "cap": 0.10, "sizing": "vw"}, "example": long_policy()}          # example = the model's long book (quant.portfolio.model; SPEC A2/A3); vw90 is the v1 book, kept for the record
@@ -44,12 +44,6 @@ def trend_state() -> dict[str, Any]:
     return trend(px)
 
 
-def fx_gbpusd() -> float:
-    import yfinance as yf
-
-    return float(yf.Ticker("GBPUSD=X").fast_info["lastPrice"])
-
-
 def scores_live(score: str) -> tuple[pd.DataFrame, str, str]:
     """The BRIDGE live table (the source before amendment A4): score, market cap and last price from the newest archive."""
     day = AR.latest_day("live_scores.parquet")
@@ -71,11 +65,6 @@ def scores_master() -> tuple[pd.DataFrame, str, str]:
     px = {int(p): last_close(int(p), YAHOO_DAILY)[0] for p in s.index[s["q"] > min(v["entry"] for v in POLICIES.values())]}
     d = pd.DataFrame({"score": s["score"], "mcap": s["me_lag"], "px": pd.Series(px).reindex(s.index).fillna(s["price_lag"].abs())})
     return d, f"scores {f.name}", month[:7]
-
-
-def map_t212(sel: pd.DataFrame) -> pd.DataFrame:
-    """Adds cusip, ticker and the Trading 212 USD line (`t212`, None if there is none) to rows indexed by permno."""
-    return sel.join(M.map_permnos(sel.index)[["cusip", "ticker", "t212"]])
 
 
 def short_leg(d: pd.DataFrame, month: str, aum_usd: float, held: set[int] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -155,10 +144,12 @@ def map_alpaca(sel: pd.DataFrame) -> pd.DataFrame:
 
 
 def map_lines(sel: pd.DataFrame, broker: str = BROKER) -> pd.DataFrame:
-    return map_alpaca(sel) if broker == "alpaca" else map_t212(sel)
+    """Rows mapped to the broker's lines (`line_column(broker)`); only Alpaca exists (amendment A14)."""
+    line_column(broker)
+    return map_alpaca(sel)
 
 
-def unmapped_share(sel: pd.DataFrame, pol: dict[str, Any], col: str = "t212") -> float:
+def unmapped_share(sel: pd.DataFrame, pol: dict[str, Any], col: str = "line") -> float:
     """Share of the selected names' raw weight that has no broker line (`col` missing): the weight lost before renormalisation (preflight's 5% rail)."""
     w = raw_weight(sel["mcap"], pol)
     return float(w[sel[col].isna()].sum() / w.sum())
@@ -167,9 +158,7 @@ def unmapped_share(sel: pd.DataFrame, pol: dict[str, Any], col: str = "t212") ->
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--score", default="EXAMPLE")
-    ap.add_argument("--aum-gbp", type=float, default=10000.0, help="Trading 212 path only: account value in GBP")
-    ap.add_argument("--aum-usd", type=float, default=100000.0, help="Alpaca path (amendment A10): account value in USD, no FX")
-    ap.add_argument("--broker", default=BROKER, choices=["alpaca", "t212"])
+    ap.add_argument("--aum-usd", type=float, default=100000.0, help="account value in USD (amendment A10: no FX)")
     ap.add_argument("--long-only", action="store_true", help="Alpaca book without the A11 short leg")
     ap.add_argument("--policy", default=PRIMARY, choices=list(POLICIES))
     ap.add_argument("--source", default="master", choices=["master", "live"], help="master: quant.models.scores (amendment A4); live: the BRIDGE live table")
@@ -177,26 +166,25 @@ def main(argv: list[str] | None = None) -> None:
     d, src, month = scores_master() if a.source == "master" else scores_live(a.score)
     d["q"] = d["score"].rank(pct=True)
     pol = POLICIES[a.policy]
-    col = line_column(a.broker)
-    stem = f"target_book_{a.score}_{a.policy}" + (f"_master_{month}" if a.source == "master" else "") + ("_alpaca" if a.broker == "alpaca" else "")
+    col = line_column(BROKER)
+    stem = f"target_book_{a.score}_{a.policy}" + (f"_master_{month}" if a.source == "master" else "") + "_alpaca"
     if (RES / f"{stem}.csv").exists():
         raise SystemExit(f"refused: {RES / stem}.csv exists; a target book is the record its plans were made from: move it aside to rebuild it")
-    if a.source == "master" and a.broker == "alpaca":
-        ids = M.crsp_ids(d.index)
+    if a.source == "master":
+        ids = crsp_ids(d.index)
         t2p = {str(t): int(cast(int, p)) for p, t in ids["ticker"].dropna().items()}
         held_long, held_short, held_source = previous_book(f"target_book_{a.score}_{a.policy}_master_", month, ticker_to_permno=t2p)
     else:
         held_long, held_short, held_source = set(), set(), "not applied"
-    sel = map_lines(select(d, pol, held_long), a.broker)
+    sel = map_lines(select(d, pol, held_long))
     n_sel = len(sel)
-    fx = fx_gbpusd() if a.broker == "t212" else None
-    aum_usd = a.aum_gbp * fx if fx is not None else a.aum_usd
+    aum_usd = a.aum_usd
     if not sel[col].notna().any():
-        raise SystemExit(f"refused: none of the {n_sel} selected names maps to a {a.broker} line (is the instrument list missing or stale?)")
+        raise SystemExit(f"refused: none of the {n_sel} selected names maps to an Alpaca symbol (is the asset list missing or stale?)")
     ok = size(sel[sel[col].notna()], pol, aum_usd)
     out = ok.assign(permno=ok.index.astype(int))[[col, "permno", "ticker", "score", "q", "mcap", "px", "w", "usd_target", "shares", "flags"]]
     short_info: dict[str, Any] = {}
-    if a.broker == "alpaca" and SHORTS and not a.long_only:
+    if SHORTS and not a.long_only:
         sb, short_info = short_leg(d, month, aum_usd, held_short)
         if overlap := sorted(set(sb["line"]) & set(out[col])):
             raise SystemExit(f"refused: names on both legs: {overlap}")
@@ -213,9 +201,9 @@ def main(argv: list[str] | None = None) -> None:
         out = pd.concat([out, sh], ignore_index=True)
     RES.mkdir(parents=True, exist_ok=True)
     out.to_csv(RES / f"{stem}.csv", index=False)
-    info = {"score_column": a.score, "policy": a.policy, "policy_rules": pol, "source": src, "decision_month": month, "broker": a.broker, "selected": int(n_sel),
+    info = {"score_column": a.score, "policy": a.policy, "policy_rules": pol, "source": src, "decision_month": month, "broker": BROKER, "selected": int(n_sel),
             "mapped_to_usd_lines": int(len(ok)), "weight_dropped_before_renormalisation": unmapped_share(sel, pol, col),
-            "max_weight": float(ok["w"].max()), "effective_n": float(1 / (ok["w"] ** 2).sum()), "aum_gbp": a.aum_gbp if fx is not None else None, "gbpusd": fx, "aum_usd": aum_usd,
+            "max_weight": float(ok["w"].max()), "effective_n": float(1 / (ok["w"] ** 2).sum()), "aum_usd": aum_usd,
             "flagged_below_min": int((ok["flags"] != "").sum()), "top10": out.head(10)[["ticker", "w"]].round(4).to_dict("records"), "overlay_state": trend_state(),
             "held_from": held_source, "held_long": len(held_long), "held_short": len(held_short), **short_info, "status": "dry run: no account read, no order endpoint"}
     (RES / f"{stem}.json").write_text(json.dumps(info, indent=1, default=float) + "\n")

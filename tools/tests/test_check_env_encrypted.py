@@ -27,8 +27,8 @@ def test_a_repository_whose_key_file_is_not_ignored_fails(tmp_path):
 
 
 def test_a_planted_plaintext_secret_fails(tmp_path):
-    r = repo(tmp_path, env='A="encrypted:x"\nT212_FULL_SECRET_KEY=abc\n')
-    assert CE.findings(r) == [".env: T212_FULL_SECRET_KEY is not encrypted (use `dotenvx set T212_FULL_SECRET_KEY <value>` or `dotenvx encrypt`)"]
+    r = repo(tmp_path, env='A="encrypted:x"\nBROKER_SECRET_KEY=abc\n')
+    assert CE.findings(r) == [".env: BROKER_SECRET_KEY is not encrypted (use `dotenvx set BROKER_SECRET_KEY <value>` or `dotenvx encrypt`)"]
 
 
 def test_a_fresh_clone_without_an_env_file_passes(tmp_path):

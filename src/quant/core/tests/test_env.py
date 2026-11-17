@@ -19,6 +19,5 @@ def test_a_value_still_in_its_encrypted_form_is_refused_and_the_name_is_reported
 
 def test_both_broker_modules_use_this_definition():
     from quant.execution.brokers.alpaca import api as alpaca
-    from quant.execution.brokers.t212 import api as t212
 
-    assert alpaca.env is env and t212.env is env
+    assert alpaca.env is env

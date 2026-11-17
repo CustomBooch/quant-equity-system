@@ -18,7 +18,7 @@ import check_imports as CI
 SELECT = "F,E9,B,S,PLE,PLW1510,SIM115"
 IGNORED = {
     "S101": "assert in tests is how pytest checks; production modules contain none (explicit raises instead, so checks survive python -O)",
-    "S310": "urlopen is called only on quant.execution.brokers.t212.api.DEMO, a fixed https host (tested in src/quant/execution/brokers/t212/tests/test_api.py)",
+    "S310": "urlopen is called only on quant.execution.brokers.alpaca.api.PAPER, a fixed https host (tested in src/quant/execution/brokers/alpaca/tests/test_api.py)",
     "S314": "the parsed XML is the inside of the owner's own Capital IQ .xlsx exports; Python's ElementTree does not resolve external entities",
     "S603": "subprocess argument lists are fixed (git, cargo, this interpreter); no shell and no outside input",
     "S607": "git and cargo are found on PATH by design (tools/py and checks.ps1 set it)",

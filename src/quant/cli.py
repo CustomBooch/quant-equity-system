@@ -37,12 +37,6 @@ COMMANDS = {
     "preflight": Command("quant.execution.preflight", "go / no-go checks before a batch"),
     "engine": Command("quant.execution.engine", "the order path: plan, send, reconcile, verify-audit"),
     "borrow-watch": Command("quant.ops.borrow_watch", "alert on held shorts that are no longer easy to borrow (local files only)"),
-    # the Trading 212 practice account (read only; not the broker in use)
-    "t212-instruments": Command("quant.execution.brokers.t212.pull_instruments", "refresh the Trading 212 instrument list"),
-    "t212-health": Command("quant.execution.brokers.t212.health", "health of the Trading 212 read layer"),
-    "t212-pull": Command("quant.execution.brokers.t212.pull", "read the practice account into the journal"),
-    "t212-reconcile": Command("quant.execution.brokers.t212.reconcile", "cross-check the journal against the engine's records"),
-    "t212-fills": Command("quant.execution.brokers.t212.fills", "fills, slippage and costs from the journal"),
     # infrastructure
     "data": Command("quant.data.sources.cli", "the registered data sources: list, show, pull, check (the wiki page Adding-a-dataset)"),
     "licences": Command("quant.core.licences", "what each data source may be used for, and what real-money use would first need"),

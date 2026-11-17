@@ -50,7 +50,7 @@ def write_plan(plan: dict[str, Any]) -> Path:
     PLANS.mkdir(parents=True, exist_ok=True)
     f = PLANS / f"{plan['plan_hash']}.json"
     f.write_text(json.dumps(plan, indent=1) + "\n")
-    A.log("plan", plan_hash=plan["plan_hash"], file=str(f), orders=len(plan["orders"]), slot=plan.get("slot"), tranche=plan.get("tranche"), broker=plan.get("broker", "t212"))
+    A.log("plan", plan_hash=plan["plan_hash"], file=str(f), orders=len(plan["orders"]), slot=plan.get("slot"), tranche=plan.get("tranche"), broker=plan.get("broker", ""))
     return f
 
 
@@ -70,14 +70,16 @@ def latest_prices(tickers: list[str]) -> tuple[dict[str, float], str]:
 
 def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float, slot: dt.date, held: dict[str, float] | None = None) -> dict[str, Any]:
     """Plan for one Tuesday slot from a target book (quant.portfolio.targets): that slot's tranche (1/K of the account times the overlay exposure) moves from `held` to the book.
-    `held` is the tranche's current shares by Trading 212 ticker (the engine passes the tranche ledger's); None means an empty tranche. The plan records it, so that a
+    `held` is the tranche's current shares by Alpaca symbol (the engine passes the tranche ledger's); None means an empty tranche. The plan records it, so that a
     clean reconciliation can record the tranche's new holdings (held plus the orders the broker accepted)."""
     import pandas as pd
 
     from quant.portfolio import schedule as SCH
 
     b = pd.read_csv(target_csv)
-    col = "line" if "line" in b.columns else "t212"                                  # amendment A10: Alpaca books carry `line` (plain symbols)
+    if "line" not in b.columns:
+        raise ValueError(f"{target_csv} has no `line` column of Alpaca symbols: rebuild the target book (amendment A14)")
+    col = "line"
     yahoo = dict(zip(b[col], b["ticker"], strict=True))
     px_y, px_date = latest_prices(sorted(set(b["ticker"])))
     prices = {t: px_y[y] for t, y in yahoo.items() if y in px_y}
@@ -92,6 +94,6 @@ def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float
         plan["short_fraction"] = short_fraction
     if lev != 1.0:
         plan["leverage"] = lev
-    plan.update({"broker": "alpaca" if col == "line" else "t212", "slot": str(slot), "tranche": SCH.tranche_of(slot), "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
+    plan.update({"broker": "alpaca", "slot": str(slot), "tranche": SCH.tranche_of(slot), "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
                  "held": dict(held or {}), "held_source": "assumed empty (account not read)" if held is None else "given", "usd_total": round(sum(o["usd"] for o in plan["orders"]), 2)})
     return plan

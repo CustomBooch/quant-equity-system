@@ -2,7 +2,7 @@
 
     dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets     # (read-only) -> data/raw_ext/alpaca_<date>/assets.json
 
-Mapping: the latest CRSP ticker of a permno (quant.data.instruments.t212.crsp_ids) is the Alpaca symbol when that symbol is active and tradable. Otherwise, CRSP keeps the
+Mapping: the latest CRSP ticker of a permno (quant.data.instruments.crsp.crsp_ids) is the Alpaca symbol when that symbol is active and tradable. Otherwise, CRSP keeps the
 share class apart from the ticker (BRK, BF, MOG), so the one tradable Alpaca symbol of the form TICKER.X is used when there is exactly one. Else no line."""
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from quant.core.paths import REPO
-from quant.data.instruments.t212 import crsp_ids
+from quant.data.instruments.crsp import crsp_ids
 
 COLUMNS = ["symbol", "name", "status", "tradable", "fractionable", "shortable", "easy_to_borrow", "exchange"]
 
