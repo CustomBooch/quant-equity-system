@@ -1,0 +1,16 @@
+[package]
+name = "rust_core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust kernels: order planning and pre-trade checks (ported from Python, golden-tested), and NumPy-compatible simulation kernels"
+publish = false
+
+# rlib for the command line and the tests; cdylib (rust_core.dll) for Python through the C ABI in src/ffi.rs
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+# No third-party crates on purpose: nothing to compile but this code, no build scripts, nothing to audit.
+
+# No fast-math: results must reproduce the Python reference bit for bit where the algorithm allows.
+[profile.release]
+opt-level = 3

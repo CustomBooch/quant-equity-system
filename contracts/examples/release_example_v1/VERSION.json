@@ -1,0 +1,21 @@
+{
+ "code_commit": "example",
+ "created_utc": "2026-10-21T20:54:16+00:00",
+ "description": "Synthetic example for cross-language tests",
+ "expected": {
+  "n": 3
+ },
+ "files": {
+  "data/note.txt": {
+   "bytes": 36,
+   "sha256": "88146a064cd832088310389dfd288ee7195fcaea05383a6ab5b46746d05f1283"
+  },
+  "series.txt": {
+   "bytes": 61,
+   "sha256": "327dccb7b7b7a6246eddead331c4cb53f3a483a5f0d71bfc1aa190d8450e39e8"
+  }
+ },
+ "inputs": {},
+ "release": "release_example_v1",
+ "schema": "release/1"
+}

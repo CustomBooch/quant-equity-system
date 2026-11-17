@@ -1,0 +1,7 @@
+#!/bin/bash
+# The project's Python: the virtual environment at .venv (built from requirements/core.lock.txt), with src on PYTHONPATH.
+# Override the interpreter with QUANT_PYTHON=/path/to/python.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "$OSTYPE" in msys*|cygwin*) sep=";"; venv="$root/.venv/Scripts/python.exe" ;; *) sep=":"; venv="$root/.venv/bin/python" ;; esac
+export PYTHONPATH="$root/src${PYTHONPATH:+$sep$PYTHONPATH}"
+exec "${QUANT_PYTHON:-$venv}" "$@"

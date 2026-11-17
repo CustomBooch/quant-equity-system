@@ -1,0 +1,28 @@
+{
+ "code_commit": "example",
+ "created_utc": "2026-10-21T21:13:25+00:00",
+ "description": "Synthetic data-layer example",
+ "expected": {},
+ "files": {
+  "table.txt": {
+   "bytes": 40,
+   "sha256": "9ba41e1d5258c46444a1f12b19d08124b49b2cbc5d29434fd9260f6fd008da2e"
+  },
+  "validation_report.txt": {
+   "bytes": 28,
+   "sha256": "c6744253f31ce1253a61ade42672b74b1784bbce19dc9c7349247faf1e54a36b"
+  }
+ },
+ "inputs": {
+  "raw_input_1": "0000000000000000000000000000000000000000000000000000000000000000"
+ },
+ "release": "release_validated_v1",
+ "schema": "release/1",
+ "validation": {
+  "gates": {
+   "G1_pit_parity": "pass",
+   "G2_coverage": "pass"
+  },
+  "report_sha256": "c6744253f31ce1253a61ade42672b74b1784bbce19dc9c7349247faf1e54a36b"
+ }
+}

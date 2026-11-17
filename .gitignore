@@ -1,0 +1,21 @@
+# Python and tool caches
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# data, records and secrets never go into git
+record/*
+!record/.gitkeep
+/data/
+.env
+.env.keys
+*.parquet
+*.duckdb
+
+# Rust
+rust_core/target/

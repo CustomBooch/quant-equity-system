@@ -1,0 +1,43 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements/core.lock.txt
+      - run: python -m quant.core.kernels build    # the engine refuses every plan without the Rust pre-trade check, so its tests need the library
+      - run: python tools/check_layout.py
+      - run: python tools/check_imports.py
+      - run: python tools/check_duplicates.py
+      - run: python -m ruff check --no-cache .
+      - run: python -m mypy
+      - run: python -m pytest -q -rs
+
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: cargo test --manifest-path rust_core/Cargo.toml
+      - run: cargo run --release --manifest-path rust_core/Cargo.toml -- verify-release contracts/examples/release_example_v1
+
+  r:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: r
+    steps:
+      - uses: actions/checkout@v5
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.6.1"
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: r
+      - run: Rscript -e "res <- as.data.frame(testthat::test_dir('tests/testthat', stop_on_failure = FALSE)); quit(status = as.integer(sum(res\$failed) + sum(res\$error) > 0))"

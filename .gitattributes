@@ -1,0 +1,9 @@
+# the example releases are verified by their bytes: never convert line endings
+contracts/examples/** -text
+rust_core/tests/fixtures/** -text
+# bash scripts keep LF on Windows checkouts
+*.sh text eol=lf
+tools/py text eol=lf
+# count the R code in the language statistics (GitHub otherwise leaves it out)
+r/R/*.R linguist-language=R linguist-detectable=true
+r/tests/**/*.R linguist-language=R linguist-detectable=true

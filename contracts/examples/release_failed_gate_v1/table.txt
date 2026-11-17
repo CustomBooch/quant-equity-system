@@ -1,0 +1,2 @@
+permno,month,value
+10001,2020-01-01,1.5

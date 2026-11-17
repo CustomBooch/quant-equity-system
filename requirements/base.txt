@@ -1,0 +1,40 @@
+# Core data
+numpy
+pandas
+pyarrow
+
+# Database
+duckdb
+
+# Machine learning
+scikit-learn
+lightgbm
+xgboost
+
+# Portfolio optimisation
+cvxpy
+
+# HTTP / web
+requests
+beautifulsoup4
+
+# File formats
+openpyxl
+PyYAML
+
+# NLP / sentiment
+pysentiment2
+
+# Utilities
+pycountry
+scipy
+statsmodels
+arch
+linearmodels
+tqdm
+
+# Dev / testing
+pytest
+
+# WRDS data access
+wrds
