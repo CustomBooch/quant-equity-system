@@ -101,3 +101,14 @@ fn a_manifest_nested_deeper_than_the_limit_is_an_error_not_a_crash() {
     assert!(!verify_release(&d).unwrap_err().contains("nesting"));
     let _ = fs::remove_dir_all(&d);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_link_back_to_the_release_directory_is_refused_not_walked() {
+    let d = scratch("symlink_loop");
+    std::os::unix::fs::symlink(&d, d.join("loop_a")).unwrap();
+    std::os::unix::fs::symlink(&d, d.join("loop_b")).unwrap();
+    let err = verify_release(&d).unwrap_err();
+    assert!(err.contains("not listed") && err.contains("loop_a"), "{err}");
+    let _ = fs::remove_dir_all(&d);
+}

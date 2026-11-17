@@ -113,8 +113,9 @@ def alpaca_shortable() -> set[str]:
 
 
 def short_sales(plan: dict[str, Any]) -> list[tuple[dict[str, Any], float]]:
-    """(order, shares opened short) for each order that takes the tranche's recorded holding below zero."""
-    held = plan.get("held", {})
+    """(order, shares opened short) for each order that takes the ACCOUNT's holding of the name below zero (amendment A17): the sum over all tranches of the
+    ledger, not this tranche's holding alone, because a sale of a long in one tranche adds to the account's short when another tranche is short the same name."""
+    held = LG.aggregate(LG.load())
     out = []
     for o in plan["orders"]:
         before, after = held.get(o["ticker"], 0.0), held.get(o["ticker"], 0.0) + o["quantity"]

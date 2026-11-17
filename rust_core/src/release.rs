@@ -11,8 +11,10 @@ pub const MANIFEST: &str = "VERSION.json";
 
 fn walk(dir: &Path, root: &Path, out: &mut BTreeSet<String>) -> Result<(), String> {
     for e in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
-        let p: PathBuf = e.map_err(|e| e.to_string())?.path();
-        if p.is_dir() {
+        let e = e.map_err(|e| e.to_string())?;
+        let p: PathBuf = e.path();
+        // file_type() does not follow symbolic links: a link to a directory is not walked (it is listed as a file, so a release holding one is refused as unlisted)
+        if e.file_type().map_err(|e| e.to_string())?.is_dir() {
             walk(&p, root, out)?;
         } else {
             let rel = p.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");

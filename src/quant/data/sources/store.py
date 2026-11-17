@@ -36,6 +36,8 @@ def pull(source: DataSource, request: PullRequest, root: Path = ROOT, today: dt.
     if problems:
         raise Refused(f"{ds.name}: " + "; ".join(problems))
     out = root / ds.name / day.isoformat()
+    if (out / "MANIFEST.json").exists():
+        raise Refused(f"{ds.name}: already pulled on {day.isoformat()}; a stored pull is never replaced, so nothing was written (move the folder aside to pull again)")
     out.mkdir(parents=True, exist_ok=True)
     f = out / "data.parquet"
     frame.sort_values(ds.key).to_parquet(f, index=False)

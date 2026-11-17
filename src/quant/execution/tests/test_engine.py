@@ -759,3 +759,17 @@ class TestRoundThree:
         broker.positions = [{"symbol": "BBB", "qty": "4", "side": "long", "market_value": "80"}, {"symbol": "ZZZ", "qty": "1", "side": "long"}]
         with pytest.raises(E.Refused, match="ZZZ has no market value"):
             E.check_gates(ready(), True)
+
+
+class TestRoundFour:
+    """Amendment A18's neighbour in the same scan: short sales are judged on the account's holding, not the tranche's."""
+
+    def test_a_sale_that_adds_to_another_tranches_short_in_the_same_name_is_a_short_sale(self, broker):
+        LG.record_batch(LG.load(), 1, {"BBB": -10.0})                                  # tranche 1 is short 10 BBB; tranche 0 is long 4 BBB: the account is short 6
+        p = ready()                                                                    # tranche 0 sells its 4 BBB: the account goes from -6 to -10
+        assert [(o["ticker"], n) for o, n in E.short_sales(p)] == [("BBB", 4.0)]
+        with pytest.raises(E.Refused, match=r"short sales without a declared short fraction: \['BBB'\]"):
+            E.check_gates(p, True)
+
+    def test_a_sale_that_only_reduces_a_long_account_position_is_not_a_short_sale(self, broker):
+        assert E.short_sales(ready()) == []

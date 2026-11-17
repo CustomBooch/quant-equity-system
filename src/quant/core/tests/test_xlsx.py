@@ -47,3 +47,11 @@ def test_a_part_that_would_unpack_above_the_size_limit_is_refused_before_it_is_r
     monkeypatch.setattr("quant.core.xlsx.MAX_PART_BYTES", 50)
     with pytest.raises(XlsxFormatError, match=r"part xl/.* unpacks to \d+ bytes, above the 50 limit"):
         read_sheets(f)
+
+
+def test_a_workbook_listing_more_sheets_than_the_limit_is_refused(tmp_path, monkeypatch):
+    f = workbook(tmp_path / "many.xlsx", '<row r="1"><c r="A1"><v>1</v></c></row>')
+    assert list(read_sheets(f))                                                         # one sheet is fine
+    monkeypatch.setattr("quant.core.xlsx.MAX_SHEETS", 0)
+    with pytest.raises(XlsxFormatError, match="lists 1 sheets, above the 0 limit"):
+        read_sheets(f)

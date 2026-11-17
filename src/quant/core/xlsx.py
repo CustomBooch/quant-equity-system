@@ -34,6 +34,7 @@ def _attr(node: ET.Element, name: str) -> str:
     return v
 
 
+MAX_SHEETS = 1024                                                  # amendment A17
 MAX_PART_BYTES = 1 << 30                                           # amendment A17: no part of a workbook may unpack to more than 1 GiB
 
 
@@ -56,15 +57,21 @@ def read_sheets(path: Path | str) -> dict[str, Rows]:
         wb = ET.fromstring(_part(z, "xl/workbook.xml"))
         rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(_part(z, "xl/_rels/workbook.xml.rels"))}
         out: dict[str, Rows] = {}
-        for sh in _required(wb.find("m:sheets", NS), "workbook sheets"):
+        parsed: dict[str, Rows] = {}                                              # amendment A17: a part several sheets point to is parsed once
+        sheets = _required(wb.find("m:sheets", NS), "workbook sheets")
+        if len(sheets) > MAX_SHEETS:
+            raise XlsxFormatError(f"workbook lists {len(sheets)} sheets, above the {MAX_SHEETS} limit")
+        for sh in sheets:
             target = rels[_attr(sh, "{%s}id" % NS["r"])]
             if target is None:
                 raise XlsxFormatError(f"sheet {sh.get('name')!r} has no relationship target")
             target = target.lstrip("/")
             target = target if target.startswith("xl/") else "xl/" + target
-            raw = _part(z, target)
-            rows = KN.xlsx_rows(raw, shared)
-            out[_attr(sh, "name")] = _rows_et(raw, shared) if rows is None else rows
+            if target not in parsed:
+                raw = _part(z, target)
+                rows = KN.xlsx_rows(raw, shared)
+                parsed[target] = _rows_et(raw, shared) if rows is None else rows
+            out[_attr(sh, "name")] = parsed[target]
     return out
 
 

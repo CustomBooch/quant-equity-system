@@ -133,3 +133,13 @@ def test_every_registered_source_is_sound_and_names_an_existing_licence_row():
     for name, cls in RG.sources().items():
         assert cls.dataset.problems() == [], name
         assert cls.dataset.licence in names, f"{name}: licence row {cls.dataset.licence!r} missing from quant.core.licences"
+
+
+def test_a_second_pull_on_the_same_day_is_refused_and_leaves_the_stored_pull_unchanged(tmp_path):
+    first = ST.pull(Toy(), REQ, tmp_path, TODAY)
+
+    class Revised(Toy):
+        frame = rows(sales=[7.0, 8.0, 9.0])
+    with pytest.raises(ST.Refused, match="already pulled on"):
+        ST.pull(Revised(), REQ, tmp_path, TODAY)
+    assert ST.load(Toy(), root=tmp_path)["sales"].iloc[0] == 1.0 and first["sha256"] == json.loads((tmp_path / "toy_quarterly" / TODAY.isoformat() / "MANIFEST.json").read_text())["sha256"]
