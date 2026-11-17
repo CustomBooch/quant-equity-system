@@ -34,16 +34,27 @@ def _attr(node: ET.Element, name: str) -> str:
     return v
 
 
+MAX_PART_BYTES = 1 << 30                                           # amendment A17: no part of a workbook may unpack to more than 1 GiB
+
+
+def _part(z: zipfile.ZipFile, name: str) -> bytes:
+    """One part of the archive, refused before it is unpacked when its declared size is above MAX_PART_BYTES (a small file can unpack to gigabytes)."""
+    size = z.getinfo(name).file_size
+    if size > MAX_PART_BYTES:
+        raise XlsxFormatError(f"part {name} unpacks to {size} bytes, above the {MAX_PART_BYTES} limit")
+    return z.read(name)
+
+
 def read_sheets(path: Path | str) -> dict[str, Rows]:
     """Every sheet of the workbook by name. The archive is closed before returning; XlsxFormatError if a required part is malformed."""
     with zipfile.ZipFile(path) as z:
         shared: list[str] = []
         if "xl/sharedStrings.xml" in z.namelist():
-            raw = z.read("xl/sharedStrings.xml")
+            raw = _part(z, "xl/sharedStrings.xml")
             from_kernel = KN.xlsx_shared(raw)
             shared = _shared_et(raw) if from_kernel is None else from_kernel
-        wb = ET.fromstring(z.read("xl/workbook.xml"))
-        rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))}
+        wb = ET.fromstring(_part(z, "xl/workbook.xml"))
+        rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(_part(z, "xl/_rels/workbook.xml.rels"))}
         out: dict[str, Rows] = {}
         for sh in _required(wb.find("m:sheets", NS), "workbook sheets"):
             target = rels[_attr(sh, "{%s}id" % NS["r"])]
@@ -51,7 +62,7 @@ def read_sheets(path: Path | str) -> dict[str, Rows]:
                 raise XlsxFormatError(f"sheet {sh.get('name')!r} has no relationship target")
             target = target.lstrip("/")
             target = target if target.startswith("xl/") else "xl/" + target
-            raw = z.read(target)
+            raw = _part(z, target)
             rows = KN.xlsx_rows(raw, shared)
             out[_attr(sh, "name")] = _rows_et(raw, shared) if rows is None else rows
     return out

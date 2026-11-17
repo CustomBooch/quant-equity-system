@@ -107,3 +107,20 @@ class TestAnchor:
     def test_a_log_git_does_not_track_has_no_anchor_and_is_not_failed_for_it(self, repo):
         three()
         assert A.verify()["anchor_problem"] is None
+
+
+def test_writers_running_at_the_same_time_each_chain_to_a_different_predecessor():
+    """Amendment A17: eight threads (separate file handles, as separate processes would have) append 15 records each; the chain must still verify."""
+    import threading
+
+    def work(k):
+        for i in range(15):
+            A.log("sent", writer=k, i=i)
+
+    threads = [threading.Thread(target=work, args=(k,)) for k in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    v = A.verify()
+    assert v["records"] == 120 and v["broken"] == [] and len({r["prev"] for r in A.records()}) == 120

@@ -40,3 +40,10 @@ def test_a_cell_whose_reference_has_no_column_letters_is_refused(tmp_path):
     f = workbook(tmp_path / "c.xlsx", '<row r="1"><c r="12"><v>1</v></c></row>')
     with pytest.raises(XlsxFormatError, match="no column letters"):
         read_sheets(f)
+
+
+def test_a_part_that_would_unpack_above_the_size_limit_is_refused_before_it_is_read(tmp_path, monkeypatch):
+    f = workbook(tmp_path / "big.xlsx", '<row r="1"><c r="A1"><v>1</v></c></row>')
+    monkeypatch.setattr("quant.core.xlsx.MAX_PART_BYTES", 50)
+    with pytest.raises(XlsxFormatError, match=r"part xl/.* unpacks to \d+ bytes, above the 50 limit"):
+        read_sheets(f)

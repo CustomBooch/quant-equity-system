@@ -8,6 +8,9 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from quant.core.paths import REPO
@@ -29,15 +32,41 @@ def records() -> list[dict[str, Any]]:
     return [json.loads(x) for x in lines()]
 
 
+@contextmanager
+def writer_lock() -> Iterator[None]:
+    """One writer at a time (amendment A17): reading the last line and appending the next is one step, so two processes (a plan made while a send is running,
+    a refused second send) cannot both chain to the same predecessor. An operating-system lock on a companion file, released if the process dies."""
+    lock = PATH.with_name(PATH.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a+b") as f:
+        if sys.platform == "win32":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)          # waits about ten seconds, then raises OSError: nothing is written unchained
+            try:
+                yield
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
 def log(event: str, **kw: Any) -> dict[str, Any]:
     """Append one record, chained to the line before it, and force it to disk before returning."""
-    last = lines()[-1:]
-    rec = {"utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "event": event, **kw, "prev": sha(last[0]) if last else None}
     PATH.parent.mkdir(parents=True, exist_ok=True)
-    with PATH.open("ab") as f:
-        f.write(json.dumps(rec, default=str).encode() + b"\n")
-        f.flush()
-        os.fsync(f.fileno())
+    with writer_lock():
+        last = lines()[-1:]
+        rec = {"utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "event": event, **kw, "prev": sha(last[0]) if last else None}
+        with PATH.open("ab") as f:
+            f.write(json.dumps(rec, default=str).encode() + b"\n")
+            f.flush()
+            os.fsync(f.fileno())
     return rec
 
 
