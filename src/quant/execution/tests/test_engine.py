@@ -19,6 +19,7 @@ from quant.portfolio import plan as P
 
 PRICES = {"AAA": 50.0, "BBB": 20.0}
 AFTER_CUTOFF = dt.datetime(2026, 11, 17, 0, 5, tzinfo=dt.timezone.utc)          # Monday 19:05 in New York: queued for Tuesday's opening auction
+SLOT = "2026-11-17"                                                              # the Tuesday after AFTER_CUTOFF (Monday evening in New York)
 TRADABLE = {"AAA", "BBB", "BRK.B", *(f"T{c}" for c in "ABCDEFGHIJK")}
 PAPER = "https://paper-api.alpaca.markets"
 THIS_MONTH = dt.date.today().strftime("%Y-%m")                                   # the decision month of the book the sample plans were made from
@@ -44,7 +45,7 @@ def sandbox(tmp_path, monkeypatch):
 def broker(monkeypatch):
     """The Alpaca paper API behind urlopen. GETs: positions answer `positions` (or raise it), the account answers `equity`, an order looked up by its
     client order id answers `orders[id]` or 404. Each POST is recorded and raises for the symbols in `fail`."""
-    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"symbol": "BBB", "qty": "4", "side": "long"}], equity="10000", orders={}, open_orders=[])
+    state = types.SimpleNamespace(requests=[], fail=set(), positions=[{"symbol": "BBB", "qty": "4", "side": "long", "market_value": "80"}], equity="10000", orders={}, open_orders=[])
 
     def urlopen(req, timeout):
         if req.get_method() == "GET":
@@ -73,7 +74,7 @@ def broker(monkeypatch):
 
 def plan(**kw):
     """Tranche 0 buys 10 AAA from nothing and sells the 4 BBB it holds: 500 and 80 USD on a 10,000 USD account. Not yet recorded."""
-    return {**P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca", "decision_month": THIS_MONTH}
+    return {**P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT}
 
 
 def ready(p=None):
@@ -89,7 +90,7 @@ def hand_made(orders, account=10000.0, held=None):
     if held:
         LG.record_batch(LG.load(), 1, held)
     return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1, "held": held or {},
-                  "broker": "alpaca", "decision_month": THIS_MONTH})
+                  "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT})
 
 
 def events():
@@ -533,7 +534,7 @@ class TestShortSales:
 
         def urlopen(req, timeout):
             if req.get_method() == "GET":
-                return io.BytesIO(b'{"equity": "100000"}' if req.full_url.endswith("/v2/account") else b'[{"symbol": "BBB", "qty": "4", "side": "long"}]' if req.full_url.endswith("/v2/positions") else b"[]")
+                return io.BytesIO(b'{"equity": "100000"}' if req.full_url.endswith("/v2/account") else b'[{"symbol": "BBB", "qty": "4", "side": "long", "market_value": "80"}]' if req.full_url.endswith("/v2/positions") else b"[]")
             state.requests.append(json.loads(req.data))
             return io.BytesIO(json.dumps({"id": "o", "status": "accepted"}).encode())
 
@@ -543,7 +544,7 @@ class TestShortSales:
     @staticmethod
     def signed(orders, sf=0.3, held=None, account=100000.0, lev=None):
         return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1,
-                      "held": held or {}, "broker": "alpaca", "decision_month": THIS_MONTH, **({"short_fraction": sf} if sf is not None else {}), **({"leverage": lev} if lev is not None else {})})
+                      "held": held or {}, "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT, **({"short_fraction": sf} if sf is not None else {}), **({"leverage": lev} if lev is not None else {})})
 
     def test_a_130_30_tranche_with_whole_share_shorts_is_sent_as_sells(self, alp):
         p = self.signed([{"ticker": "AAA", "quantity": 10.0, "usd": 1000.0, "side": "BUY"}, {"ticker": "ZZZ", "quantity": -5.0, "usd": 500.0, "side": "SELL"}])
@@ -699,3 +700,62 @@ class TestRoundTwo:
         E.send(p, True, sleep=0)
         broker.positions = [{"symbol": "AAA", "qty": "10", "side": "long"}]
         assert E.reconcile_sent(p) == [] and "BBB" not in LG.tranche(LG.load(), 0)
+
+
+class TestRoundThree:
+    """Amendment A17: the slot date, the kill switch between the two orders of one line, the gross exposure of the whole account."""
+
+    @pytest.mark.parametrize("slot, clock, message", [
+        ("2026-11-17", dt.datetime(2026, 11, 20, 0, 5, tzinfo=dt.timezone.utc), "it is 2026-11-19 in New York"),       # Thursday evening for Tuesday's plan: would trade Friday's open
+        ("2026-11-24", AFTER_CUTOFF, "slot of 2026-11-24"),                                                            # a future Tuesday's plan, sent a week early
+        ("2026-11-18", AFTER_CUTOFF, "not a Tuesday"),
+        (None, AFTER_CUTOFF, "no valid slot date"),
+        ("next week", AFTER_CUTOFF, "no valid slot date")])
+    def test_a_plan_is_refused_unless_sent_within_a_day_of_its_tuesday_slot(self, broker, monkeypatch, slot, clock, message):
+        monkeypatch.setattr(E, "CLOCK", lambda: clock)
+        with pytest.raises(E.Refused, match=message):
+            E.check_gates(ready(plan() | {"slot": slot}), True)
+
+    @pytest.mark.parametrize("clock", [dt.datetime(2026, 11, 17, 0, 5, tzinfo=dt.timezone.utc),             # the evening before the slot
+                                       dt.datetime(2026, 11, 17, 22, 0, tzinfo=dt.timezone.utc),            # the slot's own evening
+                                       dt.datetime(2026, 11, 18, 22, 0, tzinfo=dt.timezone.utc)])           # the day after
+    def test_the_evening_before_the_slot_the_slot_and_the_day_after_are_all_accepted(self, broker, monkeypatch, clock):
+        monkeypatch.setattr(E, "CLOCK", lambda: clock)
+        E.check_gates(ready(), True)
+
+    def test_the_kill_switch_stops_a_line_between_its_opening_auction_order_and_its_fractional_order(self, broker, monkeypatch):
+        p = hand_made([{"ticker": "AAA", "quantity": 10.5, "usd": 525.0, "side": "BUY"}])         # 10 whole shares at the open, 0.5 share as a day order
+        real = urllib.request.urlopen
+
+        def urlopen_then_kill(req, timeout):
+            if req.get_method() == "POST":
+                E.KILL.write_text("stop")
+            return real(req, timeout)
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen_then_kill)
+        E.send(p, True, sleep=0)
+        assert [body["time_in_force"] for _req, body in broker.requests] == ["opg"] and "halted_by_kill_switch" in events()
+
+    def test_a_line_whose_kill_switch_appeared_before_its_first_post_sends_nothing(self, broker):
+        E.KILL.write_text("stop")
+        with pytest.raises(E.Halted):
+            E.send_alpaca_line({"ticker": "AAA", "quantity": 10.5, "usd": 525.0, "side": "BUY"}, "h" * 64, 0)
+        assert broker.requests == []
+
+    def test_a_batch_that_would_take_the_whole_account_above_the_gross_limit_is_refused(self, broker):
+        limit = E.MAX_GROSS * 10000 * (1 + E.MAX_GROSS_EXCESS)
+        broker.positions = [{"symbol": "BBB", "qty": "4", "side": "long", "market_value": "80"}, {"symbol": "ZZZ", "qty": "1", "side": "long", "market_value": str(limit - 600)}]
+        p = ready()
+        E.check_gates(p, True)                                                                        # 500 bought, 80 sold, ZZZ as held: just under the limit
+        broker.positions[1]["market_value"] = str(limit - 400)
+        with pytest.raises(E.Refused, match=r"gross exposure would be .* above"):
+            E.check_gates(p, True)
+
+    def test_a_short_position_counts_by_its_absolute_value(self):
+        p = plan()
+        assert E.gross_after(p, {"BBB": (4.0, 80.0), "ZZZ": (-5.0, -1000.0)}) == 500.0 + 1000.0
+
+    def test_a_held_name_without_a_market_value_refuses_the_batch(self, broker):
+        broker.positions = [{"symbol": "BBB", "qty": "4", "side": "long", "market_value": "80"}, {"symbol": "ZZZ", "qty": "1", "side": "long"}]
+        with pytest.raises(E.Refused, match="ZZZ has no market value"):
+            E.check_gates(ready(), True)

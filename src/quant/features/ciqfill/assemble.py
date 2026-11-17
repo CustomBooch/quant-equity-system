@@ -40,7 +40,7 @@ from quant.features.ciqfill import yahoo_price as yp
 from quant.features.ciqfill.fill import bridge_rows, engine_flags, fill_month
 from quant.data.capiq.ids import match_permno
 from quant.features.ciqfill.retention import retention
-from quant.core.sql import day, one_row
+from quant.core.sql import day, ident, one_row, quote
 from quant.core.paths import YAHOO_DAILY
 from quant.core.release import sha256_file, write_release
 
@@ -458,7 +458,7 @@ def write_panel(src: Build, target: str, engine_parts: list[pd.DataFrame], bridg
     restored and the 2026 outcomes sealed (SEAL, INCOMPLETE) whatever panel it extends; then the gates on what was written."""
     con, panel_pq = src.con, src.panel
     flags_sql = ", ".join(f"false AS {c}_ciq" for c in FEATURES)
-    key_types = {r[0]: r[1] for r in con.execute(f"describe select permno, month from read_parquet('{panel_pq}')").fetchall()}
+    key_types = {r[0]: r[1] for r in con.execute(f"describe select permno, month from read_parquet({quote(str(panel_pq))})").fetchall()}
     cast = f"REPLACE (CAST(permno AS {key_types['permno']}) AS permno, CAST(month AS {key_types['month']}) AS month)"      # keep the base column types
     skip = ", ".join(day(m) for m in sorted(replaced)) or "DATE '1900-01-01'"
     unions = ""
@@ -468,25 +468,25 @@ def write_panel(src: Build, target: str, engine_parts: list[pd.DataFrame], bridg
     if bridge_parts:
         con.register("bridge_all", pd.concat(bridge_parts, ignore_index=True))
         unions += f" UNION ALL BY NAME SELECT * {cast} FROM bridge_all"
-    inner = f"SELECT *, false AS bridge, {flags_sql} FROM read_parquet('{panel_pq}') WHERE month NOT IN ({skip}){unions}"
-    base_types = {r[0]: r[1] for r in con.execute(f"describe select * from read_parquet('{panel_pq}')").fetchall()}
+    inner = f"SELECT *, false AS bridge, {flags_sql} FROM read_parquet({quote(str(panel_pq))}) WHERE month NOT IN ({skip}){unions}"
+    base_types = {r[0]: r[1] for r in con.execute(f"describe select * from read_parquet({quote(str(panel_pq))})").fetchall()}
     drift = {r[0]: base_types[r[0]] for r in con.execute(f"describe {inner}").fetchall() if r[0] in base_types and r[1] != base_types[r[0]]}      # pandas frames turn dates into timestamps and integer counts into doubles
-    expr = {c: f"CAST({c} AS {ty})" for c, ty in drift.items()}
+    expr = {c: f"CAST({ident(c)} AS {ty})" for c, ty in drift.items()}
     for c, d in SEAL.items():                                                         # the release is sealed whatever panel it extends (the gate below checks it)
         if c in base_types:
-            expr[c] = f"CASE WHEN month >= DATE '{d}' THEN NULL ELSE {expr.get(c, c)} END"
+            expr[c] = f"CASE WHEN month >= DATE '{d}' THEN NULL ELSE {expr.get(c, ident(c))} END"
     for c, d in INCOMPLETE.items():
         if c in base_types:
-            expr[c] = f"CASE WHEN month >= DATE '{d}' THEN TRUE ELSE {expr.get(c, c)} END"
-    fix = f" REPLACE ({', '.join(f'{e} AS {c}' for c, e in expr.items())})" if expr else ""
-    con.execute(f"""COPY (SELECT *{fix} FROM ({inner}) ORDER BY month, permno) TO '{target}' (FORMAT PARQUET)""")
+            expr[c] = f"CASE WHEN month >= DATE '{d}' THEN TRUE ELSE {expr.get(c, ident(c))} END"
+    fix = f" REPLACE ({', '.join(f'{e} AS {ident(c)}' for c, e in expr.items())})" if expr else ""
+    con.execute(f"""COPY (SELECT *{fix} FROM ({inner}) ORDER BY month, permno) TO {quote(str(target))} (FORMAT PARQUET)""")
     report["column_types_restored_to_base"] = sorted(drift)
-    n_base = one_row(con, f"select count(*) from read_parquet('{panel_pq}') where month NOT IN ({skip})")[0]
-    n_kept = one_row(con, f"select count(*) from read_parquet('{target}') where not bridge and month NOT IN ({skip})")[0]
+    n_base = one_row(con, f"select count(*) from read_parquet({quote(str(panel_pq))}) where month NOT IN ({skip})")[0]
+    n_kept = one_row(con, f"select count(*) from read_parquet({quote(str(target))}) where not bridge and month NOT IN ({skip})")[0]
     gates["engine_months_intact"] = "pass" if n_base == n_kept else "fail"
-    out_types = {r[0]: r[1] for r in con.execute(f"describe select * from read_parquet('{target}')").fetchall()}
+    out_types = {r[0]: r[1] for r in con.execute(f"describe select * from read_parquet({quote(str(target))})").fetchall()}
     gates["column_types_match_base"] = "pass" if all(out_types.get(c) == ty for c, ty in base_types.items()) else "fail"
-    values, flags = seal_leaks(con, f"read_parquet('{target}')", out_types)
+    values, flags = seal_leaks(con, f"read_parquet({quote(str(target))})", out_types)
     leaked = {**values, **flags}
     gates["forward_returns_sealed"] = "pass" if all(v == 0 for v in leaked.values()) else "fail"
     report["sealed_columns_checked"] = len(leaked)

@@ -17,6 +17,11 @@ def quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def ident(name: str) -> str:
+    """`name` as a quoted SQL identifier: a column name read from a file is data, never SQL (amendments A15, A17)."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def one_row(con: duckdb.DuckDBPyConnection, sql: str, error: type[Exception] = RuntimeError) -> tuple[Any, ...]:
     """The row of a query that always returns exactly one (an aggregate, a one-row coverage table); `error` (RuntimeError by default) naming the query otherwise."""
     row = con.execute(sql).fetchone()

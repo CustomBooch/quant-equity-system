@@ -64,6 +64,17 @@ def positions() -> dict[str, float]:
     return out
 
 
+def position_values() -> dict[str, tuple[float, float | None]]:
+    """Open positions, symbol -> (signed quantity, signed market value in USD or None when the broker did not give one)."""
+    out: dict[str, tuple[float, float | None]] = {}
+    for p in get("/v2/positions"):
+        short = p.get("side") == "short"
+        q = float(p["qty"])
+        mv = p.get("market_value")
+        out[p["symbol"]] = (-abs(q) if short else q, None if mv is None else (-abs(float(mv)) if short else float(mv)))
+    return out
+
+
 def asset(symbol: str) -> dict[str, Any]:
     if not symbol or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ." for c in symbol):
         raise ValueError(f"bad symbol {symbol!r}")

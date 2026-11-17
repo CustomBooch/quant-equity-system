@@ -53,10 +53,20 @@ MAX_ORDER_FRAC = 0.10                                       # SPEC section 4: re
 MAX_PLAN_AGE = dt.timedelta(days=4)                         # a plan made from Friday's close can be sent on the Tuesday slot, not a week later
 SEND_BROKER = BROKER                                        # amendment A10: plans for any other broker are refused
 QTY_TOLERANCE = 5e-5                                        # amendment A16: half the smallest quantity step (4 decimals): a fraction of a share is a difference
+MAX_GROSS_EXCESS = 0.10                                     # amendment A17: account-wide gross after the batch at most MAX_GROSS x equity x 1.10 (prices move between batches)
+SLOT_DAYS_BEFORE, SLOT_DAYS_AFTER = 1, 1                    # amendment A17: send on the evening before the Tuesday slot, on it, or the day after (New York dates)
 MAX_ACCOUNT_EXCESS = 0.05                                   # amendment A15: a plan may size on at most 5% more than the account's equity at send time
 NEW_YORK = ZoneInfo("America/New_York")
 AUCTION_CLOSED = (dt.time(9, 28), dt.time(19, 0))            # amendment A13: Alpaca rejects opening-auction orders sent between these New York times
 CLOCK: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc)   # noqa: E731 - replaced in tests
+
+
+class Halted(Exception):
+    """The kill switch appeared while a line was being sent (amendment A17): nothing of the line went out after it. `answers` are the orders of the line already accepted."""
+
+    def __init__(self, answers: list[dict[str, Any]] | None = None) -> None:
+        super().__init__("kill switch present")
+        self.answers = answers or []
 
 
 class Refused(Exception):
@@ -151,7 +161,7 @@ def account_equity() -> float:
     return ALP.equity_usd(ALP.account())
 
 
-def check_account_value(plan: dict[str, Any]) -> None:
+def check_account_value(plan: dict[str, Any]) -> float:
     """Refuse a plan sized on more than MAX_ACCOUNT_EXCESS above the account's equity read now, or when the equity cannot be read (amendment A15)."""
     try:
         equity = account_equity()
@@ -160,6 +170,48 @@ def check_account_value(plan: dict[str, Any]) -> None:
     if plan["account_value_usd"] > equity * (1 + MAX_ACCOUNT_EXCESS):
         raise Refused(f"the plan sizes orders on {plan['account_value_usd']:,.2f} USD but the account's equity is {equity:,.2f} USD "
                       f"(more than {MAX_ACCOUNT_EXCESS:.0%} above it): make a new plan with --account-usd at most the equity")
+    return equity
+
+
+def check_slot(plan: dict[str, Any], now: dt.datetime) -> None:
+    """Refuse a plan whose Tuesday slot is not within a day of the New York date of sending (amendment A17): a plan for a future Tuesday, or an old one, must not
+    trade on another day's open."""
+    try:
+        slot = dt.date.fromisoformat(str(plan.get("slot")))
+    except ValueError:
+        raise Refused(f"plan names no valid slot date ({plan.get('slot')!r})") from None
+    if slot.weekday() != 1:
+        raise Refused(f"plan slot {slot} is not a Tuesday")
+    today = now.astimezone(NEW_YORK).date()
+    if not -SLOT_DAYS_AFTER <= (slot - today).days <= SLOT_DAYS_BEFORE:
+        raise Refused(f"plan is for the slot of {slot} but it is {today} in New York: send from the evening before the slot to the day after it, else make a new plan")
+
+
+def gross_after(plan: dict[str, Any], positions: dict[str, tuple[float, float | None]]) -> float:
+    """Account-wide gross exposure in USD after the plan's orders fill at the plan's prices: every held name valued at the broker's market value, the names the plan
+    trades at the plan's price times the quantity held afterwards. Refuses (Refused) when a name the plan does not trade has no market value."""
+    px = {o["ticker"]: o["usd"] / abs(o["quantity"]) for o in plan["orders"]}
+    total = 0.0
+    for sym, (_qty, mv) in positions.items():
+        if sym in px:
+            continue
+        if mv is None:
+            raise Refused(f"position {sym} has no market value from the broker, so the account's gross exposure cannot be checked")
+        total += abs(mv)
+    for o in plan["orders"]:
+        total += abs((positions.get(o["ticker"], (0.0, None))[0] + o["quantity"]) * px[o["ticker"]])
+    return total
+
+
+def check_gross(plan: dict[str, Any], equity: float) -> None:
+    """Refuse a batch that would leave the whole account (all tranches, not just this plan) above MAX_GROSS x equity x (1 + MAX_GROSS_EXCESS) (amendment A17)."""
+    try:
+        positions = ALP.position_values()
+    except Exception as e:  # noqa: BLE001 - the exposure cannot be checked, so nothing is sent
+        raise Refused(f"positions could not be read: {e!r}"[:200]) from e
+    gross, limit = gross_after(plan, positions), MAX_GROSS * equity * (1 + MAX_GROSS_EXCESS)
+    if gross > limit:
+        raise Refused(f"after this batch the account's gross exposure would be {gross:,.2f} USD, above {limit:,.2f} ({MAX_GROSS} x equity {equity:,.2f} x {1 + MAX_GROSS_EXCESS:g})")
 
 
 def ledger_vs_positions(positions: dict[str, float]) -> str:
@@ -214,6 +266,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"positions the plan could not price, so could not trade: {unsold}: find their prices or close them by hand, then make a new plan")
     if (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(made[0]["utc"]) > MAX_PLAN_AGE:
         raise Refused(f"plan recorded {made[0]['utc']}, more than {MAX_PLAN_AGE.days} days ago: make a new plan at current prices")
+    check_slot(plan, CLOCK())
     if any(r["event"] in ("send_started", "sent") for r in past):
         raise Refused("this plan was already sent: make a new plan from the positions read back")
     if (i := plan.get("tranche")) is None:
@@ -252,7 +305,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"buys total {buys:,.2f} USD, more than the account's {acct:,.2f}" if not sf and lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than (1 + {sf}) x the account" if lev == 1.0
                       else f"buys total {buys:,.2f} USD, more than {lev} x (1 + {sf}) x the account")
-    check_account_value(plan)
+    check_gross(plan, check_account_value(plan))
     if ss := short_sales(plan):
         names = [o["ticker"] for o, _ in ss]
         if sf <= 0:
@@ -309,13 +362,17 @@ def auction_window_problem(now: dt.datetime) -> str | None:
 def send_alpaca_line(o: dict[str, Any], h: str, i: int) -> list[dict[str, Any]]:
     """Post one plan line's broker orders; an opening-auction order Alpaca refuses (an HTTP 4xx answer) is sent once as a market day order instead,
     and that fallback is logged. Returns the broker's answers. Any other failure raises (the caller records it; no retry)."""
-    answers = []
+    answers: list[dict[str, Any]] = []
     for body in alpaca_orders(o, h, i):
+        if KILL.exists():                                                             # amendment A17: checked before every post, not only before every line
+            raise Halted(answers)
         try:
             answers.append(alpaca_post(body))
         except urllib.error.HTTPError as e:
             if body["time_in_force"] != "opg" or not 400 <= e.code < 500:
                 raise
+            if KILL.exists():
+                raise Halted(answers) from e
             day = {**body, "time_in_force": "day", "client_order_id": body["client_order_id"] + "d"}
             A.log("opg_refused_day_sent", plan_hash=h, order=o, status=e.code, reason=e.read().decode(errors="replace")[:200])
             answers.append(alpaca_post(day))
@@ -375,6 +432,12 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             r: dict[str, Any] = answers[0] if len(answers) == 1 else {"orders": answers}
             A.log("sent", plan_hash=h, order=o, response=r)
             out.append({"order": o, "response": r})
+        except Halted as k:
+            if k.answers:                                                             # part of the line went out: it is recorded as sent, and reconciliation will show the rest as a difference
+                A.log("sent", plan_hash=h, order=o, response={"orders": k.answers, "partial": True})
+                out.append({"order": o, "response": {"orders": k.answers, "partial": True}})
+            A.log("halted_by_kill_switch", plan_hash=h, sent=len(out))
+            break
         except Exception as e:  # noqa: BLE001 - record and continue to the audit; no automatic retry
             A.log("error", plan_hash=h, order=o, error=repr(e)[:200])
             out.append({"order": o, "error": repr(e)[:200]})

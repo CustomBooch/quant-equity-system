@@ -29,3 +29,12 @@ def test_the_release_modules_share_this_function_and_the_pointer_keeps_its_own_e
     assert compare.one_row is sql.one_row
     with pytest.raises(ReleaseError):
         pointer._one_row(duckdb.connect(), "select 1 where false")
+
+
+def test_a_column_name_with_quotes_and_statements_stays_one_identifier():
+    name = "x\"; COPY (SELECT 1) TO '/tmp/pwned'; --"
+    con = duckdb.connect()
+    con.execute(f"CREATE TABLE t ({sql.ident(name)} INTEGER)")
+    con.execute("INSERT INTO t VALUES (7)")
+    assert con.execute(f"SELECT {sql.ident(name)} FROM t").fetchone() == (7,)
+    assert [r[0] for r in con.execute("DESCRIBE t").fetchall()] == [name]

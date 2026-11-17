@@ -12,14 +12,9 @@ from typing import Any
 
 import duckdb
 
-from quant.core.sql import one_row, quote
+from quant.core.sql import ident, one_row, quote
 
 BATCH = 40                      # columns fingerprinted per scan
-
-
-def ident(name: str) -> str:
-    """`name` as a quoted SQL identifier: a column name read from a file is data, never SQL (amendment A15)."""
-    return '"' + name.replace('"', '""') + '"'
 
 
 def columns(con: duckdb.DuckDBPyConnection, pq: str) -> list[str]:
