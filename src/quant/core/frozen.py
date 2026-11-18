@@ -50,7 +50,7 @@ def check_frozen(freeze: Path | None = None) -> dict[str, Any]:
             missing.append(rel)
         elif sha256(p) != h:
             bad.append(rel)
-    return {"entries_checked": len(ent), "mismatches": bad, "missing": missing, "intact": not bad and not missing}
+    return {"entries_checked": len(ent), "mismatches": bad, "missing": missing, "intact": bool(ent) and not bad and not missing}      # a freeze that lists nothing proves nothing (amendment A20)
 
 
 def assert_frozen_intact(freeze: Path | None = None) -> None:

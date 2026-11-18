@@ -19,6 +19,7 @@ import duckdb
 import pandas as pd
 
 from quant.data.capiq.ids import cusip8
+from quant.core.sql import quote
 from quant.core.xlsx_write import Bold, Formula, Row, Sheet, col_letter, write_workbook
 
 SNAPSHOTS = [("2026-06-18", "IBES has this snapshot: parity check"), ("2026-07-16", "IBES has this snapshot: parity check"), ("2026-08-20", "IBES has this snapshot: parity check, its CUSIPs cannot be mapped by the engine"),
@@ -55,8 +56,8 @@ def cusip9(c8: str | None) -> str | None:
 def universe(panel: Path, state: Path) -> pd.DataFrame:
     """Stocks investable in any month from 2026-06, biggest first, with the end-of-June CRSP identifiers (ticker, CUSIP8 and CUSIP9)."""
     con = duckdb.connect()
-    u = con.execute(f"""select s.permno, s.ticker, s.cusip, s.exch, s.me from read_parquet('{state.as_posix()}') s
-                        where s.smonth = DATE '2026-06-01' and s.permno in (select permno from read_parquet('{panel.as_posix()}') where in_investable and month >= DATE '2026-06-01')
+    u = con.execute(f"""select s.permno, s.ticker, s.cusip, s.exch, s.me from read_parquet({quote(state.as_posix())}) s
+                        where s.smonth = DATE '2026-06-01' and s.permno in (select permno from read_parquet({quote(panel.as_posix())}) where in_investable and month >= DATE '2026-06-01')
                         order by s.me desc, s.permno""").df()
     u["cusip8"] = cusip8(u["cusip"])
     u["cusip9"] = u["cusip8"].map(lambda c: cusip9(c) if isinstance(c, str) else None)

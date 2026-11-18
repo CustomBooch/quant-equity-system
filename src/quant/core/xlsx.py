@@ -34,28 +34,34 @@ def _attr(node: ET.Element, name: str) -> str:
     return v
 
 
+MAX_TOTAL_BYTES = 4 << 30                                          # amendment A20: all the parts of one workbook together
 MAX_SHEETS = 1024                                                  # amendment A17
 MAX_PART_BYTES = 1 << 30                                           # amendment A17: no part of a workbook may unpack to more than 1 GiB
 
 
-def _part(z: zipfile.ZipFile, name: str) -> bytes:
-    """One part of the archive, refused before it is unpacked when its declared size is above MAX_PART_BYTES (a small file can unpack to gigabytes)."""
+def _part(z: zipfile.ZipFile, name: str, used: list[int]) -> bytes:
+    """One part of the archive, refused before it is unpacked when its declared size is above MAX_PART_BYTES, or when it takes the parts read so far (`used`, one
+    number kept by the caller) above MAX_TOTAL_BYTES (a small file can unpack to gigabytes)."""
     size = z.getinfo(name).file_size
     if size > MAX_PART_BYTES:
         raise XlsxFormatError(f"part {name} unpacks to {size} bytes, above the {MAX_PART_BYTES} limit")
+    if used[0] + size > MAX_TOTAL_BYTES:
+        raise XlsxFormatError(f"part {name} would take the workbook above {MAX_TOTAL_BYTES} bytes unpacked")
+    used[0] += size
     return z.read(name)
 
 
 def read_sheets(path: Path | str) -> dict[str, Rows]:
     """Every sheet of the workbook by name. The archive is closed before returning; XlsxFormatError if a required part is malformed."""
     with zipfile.ZipFile(path) as z:
+        used = [0]
         shared: list[str] = []
         if "xl/sharedStrings.xml" in z.namelist():
-            raw = _part(z, "xl/sharedStrings.xml")
+            raw = _part(z, "xl/sharedStrings.xml", used)
             from_kernel = KN.xlsx_shared(raw)
             shared = _shared_et(raw) if from_kernel is None else from_kernel
-        wb = ET.fromstring(_part(z, "xl/workbook.xml"))
-        rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(_part(z, "xl/_rels/workbook.xml.rels"))}
+        wb = ET.fromstring(_part(z, "xl/workbook.xml", used))
+        rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(_part(z, "xl/_rels/workbook.xml.rels", used))}
         out: dict[str, Rows] = {}
         parsed: dict[str, Rows] = {}                                              # amendment A17: a part several sheets point to is parsed once
         sheets = _required(wb.find("m:sheets", NS), "workbook sheets")
@@ -68,7 +74,7 @@ def read_sheets(path: Path | str) -> dict[str, Rows]:
             target = target.lstrip("/")
             target = target if target.startswith("xl/") else "xl/" + target
             if target not in parsed:
-                raw = _part(z, target)
+                raw = _part(z, target, used)
                 rows = KN.xlsx_rows(raw, shared)
                 parsed[target] = _rows_et(raw, shared) if rows is None else rows
             out[_attr(sh, "name")] = parsed[target]

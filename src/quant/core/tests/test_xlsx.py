@@ -55,3 +55,11 @@ def test_a_workbook_listing_more_sheets_than_the_limit_is_refused(tmp_path, monk
     monkeypatch.setattr("quant.core.xlsx.MAX_SHEETS", 0)
     with pytest.raises(XlsxFormatError, match="lists 1 sheets, above the 0 limit"):
         read_sheets(f)
+
+
+def test_parts_that_are_each_small_enough_but_together_too_big_are_refused(tmp_path, monkeypatch):
+    f = workbook(tmp_path / "total.xlsx", '<row r="1"><c r="A1"><v>1</v></c></row>')
+    assert list(read_sheets(f))
+    monkeypatch.setattr("quant.core.xlsx.MAX_TOTAL_BYTES", 200)                         # each part is under MAX_PART_BYTES; the sum is not under 200
+    with pytest.raises(XlsxFormatError, match="would take the workbook above 200 bytes unpacked"):
+        read_sheets(f)

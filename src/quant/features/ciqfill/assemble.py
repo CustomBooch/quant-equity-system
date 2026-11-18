@@ -96,7 +96,7 @@ class Build:
         self.tables = (base / "build/tables").as_posix()
         self.con = duckdb.connect()
         self.con.execute("PRAGMA memory_limit='3GB'; PRAGMA threads=2")
-        self.smax = pd.Timestamp(one_row(self.con, f"select max(smonth) from read_parquet('{self.state_pq}')")[0])
+        self.smax = pd.Timestamp(one_row(self.con, f"select max(smonth) from read_parquet({quote(str(self.state_pq))})")[0])
         # insider, fails-to-deliver and EDGAR inputs: the build's work database holds the insider owner list and the coverage ranges
         self.wk = duckdb.connect((base / "build/work.duckdb").as_posix(), read_only=True)
         self.cov_i = self._span(self.wk, "select filing_start, filing_end from insider_coverage")
@@ -106,7 +106,7 @@ class Build:
         cik_pairs = self.q(f"select gvkey, cik from {self.table('cik_gvkey')}")
         self.cik_gv = set(self.q(f"select gvkey from {self.table('cik_gvkey')}")["gvkey"])
         self.edgar_gv = set(cik_pairs.loc[cik_pairs["cik"].isin(set(self.wk.execute("select cik from edgar_ciks").df()["cik"])), "gvkey"])
-        self.shares_all = {sm: self.q(f"select permno, shares from read_parquet('{self.state_pq}') where smonth = {day(sm)}").drop_duplicates("permno").set_index("permno")["shares"]
+        self.shares_all = {sm: self.q(f"select permno, shares from read_parquet({quote(str(self.state_pq))}) where smonth = {day(sm)}").drop_duplicates("permno").set_index("permno")["shares"]
                            for sm in pd.date_range(last - pd.DateOffset(months=6), self.smax, freq="MS")}
 
     @staticmethod
@@ -119,13 +119,13 @@ class Build:
         return self.con.execute(sql).df()
 
     def table(self, name: str) -> str:
-        return f"read_parquet('{self.tables}/{name}.parquet')"
+        return f"read_parquet({quote(f'{self.tables}/{name}.parquet')})"
 
     def engine(self, m: pd.Timestamp, cols: str, investable_only: bool = False) -> pd.DataFrame:
-        return self.q(f"select {cols} from read_parquet('{self.panel}') where month = {day(m)}" + (" and in_investable" if investable_only else ""))
+        return self.q(f"select {cols} from read_parquet({quote(str(self.panel))}) where month = {day(m)}" + (" and in_investable" if investable_only else ""))
 
     def state(self, m: pd.Timestamp) -> pd.DataFrame:
-        return self.q(f"select {STATE_COLS} from read_parquet('{self.state_pq}') where smonth = {day(m)}")
+        return self.q(f"select {STATE_COLS} from read_parquet({quote(str(self.state_pq))}) where smonth = {day(m)}")
 
     def link(self, m: pd.Timestamp) -> pd.DataFrame:
         return self.q(f"select permno, gvkey from {self.table('permno_gvkey')} where month = {day(m)} and gvkey is not null")
@@ -331,7 +331,7 @@ def fill_price_features(src: Build, yahoo_dir: Path, bridge_parts: list[pd.DataF
     ids = sorted(int(f.name.split(".")[0]) for f in Path(yahoo_dir).glob("*.json.gz"))
     daily = yp.load_yahoo(ids, Path(yahoo_dir))
     start = last - pd.DateOffset(months=24)
-    st = src.q(f"select smonth, permno, me, shares from read_parquet('{src.state_pq}') where smonth >= {day(start)}").drop_duplicates(["smonth", "permno"])
+    st = src.q(f"select smonth, permno, me, shares from read_parquet({quote(str(src.state_pq))}) where smonth >= {day(start)}").drop_duplicates(["smonth", "permno"])
     st["p"] = pd.to_datetime(st["smonth"]).dt.to_period("M")
     me = {cast(pd.Period, p): g.set_index("permno")["me"] for p, g in st.groupby("p")}
     shares = st.pivot(index="p", columns="permno", values="shares")
@@ -352,7 +352,7 @@ def fill_price_features(src: Build, yahoo_dir: Path, bridge_parts: list[pd.DataF
             shares.loc[p] = np.nan
         shares.loc[p, rows["permno"].to_numpy()] = rows["shares_lag"].to_numpy()
     shares = shares.sort_index()
-    rt = src.q(f"select permno, month, ret_1m from read_parquet('{src.panel}') where month >= {day(last - pd.DateOffset(months=60))} and month <= {day(last)}")
+    rt = src.q(f"select permno, month, ret_1m from read_parquet({quote(str(src.panel))}) where month >= {day(last - pd.DateOffset(months=60))} and month <= {day(last)}")
     rt["p"] = pd.to_datetime(rt["month"]).dt.to_period("M") - 1                   # type: ignore[operator]  # the month before; pandas-stubs lack Period-series arithmetic
     ret_total = rt.pivot(index="p", columns="permno", values="ret_1m")
     pmonths = [str((last - pd.DateOffset(months=k)).to_period("M")) for k in (2, 1, 0)]
