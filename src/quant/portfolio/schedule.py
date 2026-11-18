@@ -6,6 +6,7 @@ Each tranche holds 1/K of the capital, times the overlay exposure, in the monthl
 from __future__ import annotations
 
 import datetime as dt
+import math
 
 K_TRANCHES = 4
 WEEKDAY = 1                                                                     # Tuesday
@@ -25,6 +26,8 @@ def tranche_of(day: dt.date, k: int = K_TRANCHES) -> int:
 
 def overlay_exposure(market_close: float, ten_month_mean: float, level: float = DEFENSIVE_EXPOSURE) -> float:
     """Binary trend overlay: `level` exposure (0.5 by default) when the total-market series is below its 10-month mean, else full."""
+    if not (math.isfinite(market_close) and math.isfinite(ten_month_mean)):
+        raise ValueError(f"overlay inputs must be finite (close {market_close}, 10-month mean {ten_month_mean}): the trend history is incomplete")
     return level if market_close < ten_month_mean else 1.0
 
 

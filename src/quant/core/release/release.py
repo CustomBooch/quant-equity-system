@@ -72,6 +72,10 @@ def utc_stamp(now: dt.datetime | None = None) -> str:
 
 
 def _listed(directory: Path) -> list[str]:
+    """Every file under `directory` but the manifest, relative and sorted. A symbolic link anywhere in it is refused (amendment A21): it could point outside the release."""
+    links = sorted(p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_symlink())
+    if links:
+        raise ReleaseError(f"release holds symbolic links, which are refused: {links}")
     return sorted(rel for p in directory.rglob("*") if p.is_file() and (rel := p.relative_to(directory).as_posix()) != MANIFEST)
 
 

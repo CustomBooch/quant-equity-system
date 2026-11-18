@@ -102,7 +102,7 @@ def instrument_list_age(today: dt.date) -> tuple[bool, str]:
     """Check 3a: an Alpaca asset list at most 31 days old exists."""
     d = instrument_list_date()
     pull = "dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets"
-    return (False, f"no instrument list; run {pull}") if d is None else ((today - dt.date.fromisoformat(d)).days <= 31, f"{BROKER} instrument list dated {d}")
+    return (False, f"no instrument list; run {pull}") if d is None else (0 <= (today - dt.date.fromisoformat(d)).days <= 31, f"{BROKER} instrument list dated {d}")
 
 
 def mapping_coverage(today: dt.date) -> tuple[bool, str]:
@@ -133,7 +133,7 @@ def analyst_archive_age(today: dt.date) -> tuple[bool, str]:
     """Check 5: a Yahoo analyst snapshot at most 35 days old exists."""
     files = sorted(glob.glob(str(REPO / "data/raw_ext/yahoo_analyst_archive/snapshot_*.parquet")))
     d = Path(files[-1]).name.removeprefix("snapshot_")[:10] if files else None
-    return (False, "no archive") if d is None else ((today - dt.date.fromisoformat(d)).days <= 35, f"latest Yahoo analyst snapshot {d}")
+    return (False, "no archive") if d is None else (0 <= (today - dt.date.fromisoformat(d)).days <= 35, f"latest Yahoo analyst snapshot {d}")
 
 
 def audit_log_chain(today: dt.date) -> tuple[bool, str]:

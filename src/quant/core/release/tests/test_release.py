@@ -210,3 +210,14 @@ def test_a_time_without_a_zone_is_refused_before_anything_is_written(tmp_path):
     with pytest.raises(ValueError, match="no time zone"):
         write_release(d, "r1", code_commit="abc", now=dt.datetime(2026, 10, 27, 12, 0))
     assert not (d / "VERSION.json").exists()
+
+
+def test_a_symbolic_link_in_a_release_is_refused(rel, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "secret.csv").write_text("not hashed")
+    try:
+        (rel / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("this system does not allow creating symbolic links")
+    with pytest.raises(ReleaseError, match="symbolic links"):
+        verify_release(rel)

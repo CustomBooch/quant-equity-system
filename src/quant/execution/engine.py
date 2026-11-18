@@ -419,6 +419,9 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
         if ledger_differs:
             raise Refused(f"the account's positions are not what the tranche ledger holds ({ledger_differs}): find the trade outside the engine, "
                           "then settle the ledger, before any new batch")
+        if others := foreign_open_orders():
+            raise Refused(f"{len(others)} order(s) are open at the broker ({', '.join(others[:5])}): a fill after the checks would change holdings and exposure; "
+                          "cancel or wait for them, then send")
     except Refused as e:
         A.log("refused", plan_hash=h, reason=str(e))
         raise
@@ -459,6 +462,13 @@ def reconcile(orders: list[dict[str, Any]], held_before: dict[str, float], held_
         if abs(d) > tol:
             diffs.append({"ticker": t, "expected": exp.get(t, 0.0), "actual": held_after.get(t, 0.0), "diff": round(d, QTY_DECIMALS)})
     return diffs
+
+
+def foreign_open_orders() -> list[str]:
+    """Ids of every order open at Alpaca (amendment A21), checked before a send: this engine sends one batch at a time and reconciles before the next, so
+    any open order is one placed outside it, or an earlier batch not yet settled; either can fill after the position and exposure checks."""
+    open_orders: list[dict[str, Any]] = ALP.get("/v2/orders?status=open&limit=500")
+    return sorted(str(o.get("client_order_id") or o.get("id")) for o in open_orders)
 
 
 def open_plan_orders(plan: dict[str, Any]) -> list[str]:

@@ -773,3 +773,18 @@ class TestRoundFour:
 
     def test_a_sale_that_only_reduces_a_long_account_position_is_not_a_short_sale(self, broker):
         assert E.short_sales(ready()) == []
+
+
+class TestRoundFive:
+    """Amendment A21: an order open at the broker blocks a send."""
+
+    def test_an_order_open_at_the_broker_blocks_the_send_and_is_audited(self, broker):
+        p = ready()
+        broker.open_orders = [{"id": "x1", "client_order_id": "placed-by-hand", "status": "new"}]
+        with pytest.raises(E.Refused, match=r"1 order\(s\) are open at the broker \(placed-by-hand\)"):
+            E.send(p, True, sleep=0)
+        assert broker.requests == [] and events()[-1] == "refused"
+
+    def test_with_no_open_order_the_batch_goes_out(self, broker):
+        E.send(ready(), True, sleep=0)
+        assert broker.requests

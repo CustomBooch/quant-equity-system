@@ -309,3 +309,12 @@ fn leverage_beyond_the_gross_cap_or_below_one_is_refused() {
     let (q, hq) = levered_plan(&[("AAA", 1.0, 100.0)], &[], Some(0.2), Some(0.5));
     assert_eq!(paper_checks(&q, false, true, Some(&hq)).unwrap(), vec!["leverage 0.5 outside [1, 2 / (1 + 2 x short fraction)]".to_string()]);
 }
+
+#[test]
+fn a_nan_infinite_or_non_positive_account_value_is_a_reason_not_to_send() {
+    for acct in ["NaN", "Infinity", "0", "-5"] {
+        let plan = parse(&format!("{{\"orders\": [{{\"ticker\": \"A_US_EQ\", \"usd\": 1e12, \"quantity\": 1.0, \"side\": \"BUY\"}}], \"account_value_usd\": {acct}, \"plan_hash\": \"x\"}}")).unwrap();
+        let r = pre_trade_checks(&plan, false, true, Some("x")).unwrap();
+        assert!(r.iter().any(|m| m.contains("not a finite positive number")), "{acct}: {r:?}");
+    }
+}

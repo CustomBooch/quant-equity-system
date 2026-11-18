@@ -30,3 +30,9 @@ def test_slot_trade_is_the_change_of_that_tranche_only():
     new = S.tranche_target_shares({"A": 0.5, "B": 0.5}, {"A": 50.0, "B": 50.0}, 10000.0, 1.0)
     p = P.make_plan(new, old, {"A": 50.0, "B": 50.0}, 10000.0)
     assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"A": 15.0, "B": 25.0}
+
+
+def test_overlay_refuses_missing_market_data_instead_of_defaulting_to_full_exposure():
+    for close, mean in ((float("nan"), 100.0), (90.0, float("nan")), (float("inf"), 100.0)):
+        with pytest.raises(ValueError, match="finite"):
+            S.overlay_exposure(close, mean)

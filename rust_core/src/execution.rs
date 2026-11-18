@@ -182,6 +182,9 @@ pub fn pre_trade_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, 
     let account_f = account.as_f64().ok_or("account_value_usd is not a number")?;
     let recorded = plan.get("plan_hash").and_then(Value::as_str).ok_or("plan lacks plan_hash")?;
     let mut reasons = Vec::new();
+    if !account_f.is_finite() || account_f <= 0.0 {
+        reasons.push("account value is not a finite positive number".to_string());
+    }
     if kill_switch_on {
         reasons.push("kill switch is on".to_string());
     }
