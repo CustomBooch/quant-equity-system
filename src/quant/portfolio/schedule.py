@@ -24,6 +24,16 @@ def tranche_of(day: dt.date, k: int = K_TRANCHES) -> int:
     return day.isocalendar().week % k
 
 
+# One-time exceptions registered by amendment: on these slots the listed tranches may be planned in addition to the slot's own (the A5 calendar
+# resumes the week after). A29/A30: the whole account moves to the model on 2026-11-24.
+CATCH_UP: dict[dt.date, tuple[int, ...]] = {dt.date(2026, 11, 24): (0, 1, 2, 3)}
+
+
+def plannable(day: dt.date, tranche: int, k: int = K_TRANCHES) -> bool:
+    """Whether `tranche` may be planned on slot `day`: its own tranche, or one an amendment listed in CATCH_UP for that day."""
+    return tranche == tranche_of(day, k) or tranche in CATCH_UP.get(day, ())
+
+
 def overlay_exposure(market_close: float, ten_month_mean: float, level: float = DEFENSIVE_EXPOSURE) -> float:
     """Binary trend overlay: `level` exposure (0.5 by default) when the total-market series is below its 10-month mean, else full."""
     if not (math.isfinite(market_close) and math.isfinite(ten_month_mean)):

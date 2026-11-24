@@ -14,6 +14,7 @@ import pytest
 
 from quant.execution import audit as A
 from quant.execution import engine as E
+from quant.portfolio import schedule as SCH
 from quant.execution import ledger as LG
 from quant.portfolio import plan as P
 
@@ -39,6 +40,12 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(E, "CLOCK", lambda: AFTER_CUTOFF)                       # a send time Alpaca accepts opening-auction orders at (A13)
     monkeypatch.setenv("ALPACA_PAPER_KEY_ID", "kid-x1")
     monkeypatch.setenv("ALPACA_PAPER_SECRET", "secret-x2")
+
+
+@pytest.fixture(autouse=True)
+def opening_auction_orders(monkeypatch):
+    """The tests below were written for amendment A13 (opening-auction orders); A31 made day orders the default, tested in TestDayOrders."""
+    monkeypatch.setattr(E, "DAY_ORDERS", False)
 
 
 @pytest.fixture()
@@ -74,7 +81,13 @@ def broker(monkeypatch):
 
 def plan(**kw):
     """Tranche 0 buys 10 AAA from nothing and sells the 4 BBB it holds: 500 and 80 USD on a 10,000 USD account. Not yet recorded."""
-    return {**P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT}
+    return rehash({**P.make_plan({"AAA": 10.0, "BBB": 0.0}, {"BBB": 4.0}, PRICES, 10000.0, **kw), "tranche": 0, "held": {"BBB": 4.0}, "broker": "alpaca",
+                   "decision_month": THIS_MONTH, "slot": SLOT})
+
+
+def rehash(p):
+    """The plan's hash over its orders, account value and tranche, as plan_from_target records it (to-do F6)."""
+    return p | {"plan_hash": P.plan_hash(p["orders"], p["account_value_usd"], p.get("tranche"))}
 
 
 def ready(p=None):
@@ -89,7 +102,7 @@ def hand_made(orders, account=10000.0, held=None):
     """A plan whose orders were not produced by make_plan, hashed and recorded as the engine would (tranche 1, holding `held`)."""
     if held:
         LG.record_batch(LG.load(), 1, held)
-    return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1, "held": held or {},
+    return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account, 1), "tranche": 1, "held": held or {},
                   "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT})
 
 
@@ -366,6 +379,7 @@ class TestTrancheLedger:
     def test_a_plan_that_names_no_tranche_is_refused(self, broker):
         p = plan()
         del p["tranche"]
+        p = rehash(p)                                                              # a valid hash, so the tranche gate is what refuses
         with pytest.raises(E.Refused, match="names no tranche"):
             E.send(ready(p), True, sleep=0)
         assert broker.requests == []
@@ -404,6 +418,16 @@ class TestTrancheLedger:
         assert (p["tranche"], p["held"], p["exposure"], p["exposure_source"], p["held_source"]) == (0, {"BBB": 4.0}, 0.5, "target book overlay state", "ledger, tranche 0")
         assert {o["ticker"]: o["quantity"] for o in p["orders"]} == {"AAA": 15.0, "BBB": 21.0}     # 1250 USD: 750 / 50 = 15 AAA; 500 / 20 = 25 BBB, 4 held
         assert p["broker"] == "alpaca" and p["decision_month"] == THIS_MONTH and broker.requests == []
+
+    def test_the_plan_command_plans_another_tranche_only_on_an_amended_catch_up_day(self, tmp_path, yahoo, broker, capsys):
+        book = tmp_path / "book.csv"
+        pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(book, index=False)
+        book.with_suffix(".json").write_text(json.dumps({"overlay_state": {"exposure_now": 1.0}, "decision_month": THIS_MONTH}))
+        assert E.main(["plan", str(book), "--account-usd", "10000", "--slot", "2026-12-01", "--tranche", "3"]) == 1
+        assert "REFUSED: tranche 3 is not planned on the slot of 2026-12-01" in capsys.readouterr().out
+        assert E.main(["plan", str(book), "--account-usd", "10000", "--slot", "2026-11-24", "--tranche", "2"]) == 0     # A30
+        p = json.loads(next(P.PLANS.glob("*.json")).read_text())
+        assert (p["tranche"], p["held_source"]) == (2, "ledger, tranche 2")
 
     def test_the_plan_command_refuses_a_tranche_whose_last_batch_is_unsettled(self, tmp_path, broker, capsys):
         E.send(ready(), True, sleep=0)
@@ -543,7 +567,7 @@ class TestShortSales:
 
     @staticmethod
     def signed(orders, sf=0.3, held=None, account=100000.0, lev=None):
-        return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account), "tranche": 1,
+        return ready({"orders": orders, "skipped": [], "account_value_usd": account, "plan_hash": P.plan_hash(orders, account, 1), "tranche": 1,
                       "held": held or {}, "broker": "alpaca", "decision_month": THIS_MONTH, "slot": SLOT, **({"short_fraction": sf} if sf is not None else {}), **({"leverage": lev} if lev is not None else {})})
 
     def test_a_130_30_tranche_with_whole_share_shorts_is_sent_as_sells(self, alp):
@@ -602,7 +626,7 @@ class TestHardening:
 
     def test_a_plan_edited_after_it_was_recorded_is_refused_even_with_a_valid_hash_and_token(self, broker):
         p = ready()
-        p["tranche"] = 2                                                           # outside the hash: only the seal sees it
+        p["held_source"] = "edited"                                                # outside the hash: only the seal sees it
         with pytest.raises(E.Refused, match="plan file changed since it was recorded"):
             E.send(p, True, sleep=0)
         assert broker.requests == []
@@ -634,7 +658,7 @@ class TestHardening:
         with pytest.raises(E.Refused, match="a send is running"):
             E.reconcile_sent(p)
         E.LOCK.unlink()
-        q = ready(plan(tranche_fraction=0.5) | {"tranche": 1, "held": {}})
+        q = ready(rehash(plan(tranche_fraction=0.5) | {"tranche": 1, "held": {}}))
         A.log("send_started", plan_hash=q["plan_hash"], held_before={}, broker="alpaca")
         with pytest.raises(E.Refused, match="no send_finished record"):
             E.reconcile_sent(q)
@@ -788,3 +812,58 @@ class TestRoundFive:
     def test_with_no_open_order_the_batch_goes_out(self, broker):
         E.send(ready(), True, sleep=0)
         assert broker.requests
+
+
+class TestCatchUpSiblings:
+    """Amendment A30b: on a catch-up slot, the pending orders of the slot's other sent plans do not block a send and count in the gross check."""
+
+    def test_a_catch_up_siblings_pending_orders_are_tolerated_but_any_other_open_order_still_blocks(self, broker, monkeypatch):
+        p0 = ready()
+        E.send(p0, True, sleep=0)
+        p1 = hand_made([{"ticker": "AAA", "quantity": 2.0, "usd": 100.0, "side": "BUY"}])
+        broker.open_orders = [{"client_order_id": f"{p0['plan_hash'][:24]}-0", "status": "new"}]
+        with pytest.raises(E.Refused, match="are open at the broker"):
+            E.send(p1, True, sleep=0)                                                   # not a catch-up slot: the A21 rule holds
+        monkeypatch.setitem(SCH.CATCH_UP, dt.date.fromisoformat(SLOT), (0, 1))
+        assert [s["plan_hash"] for s in E.catch_up_siblings(p1)] == [p0["plan_hash"]]
+        broker.open_orders.append({"client_order_id": "placed-by-hand", "status": "new"})
+        with pytest.raises(E.Refused, match=r"1 order\(s\) are open at the broker \(placed-by-hand\)"):
+            E.send(p1, True, sleep=0)
+        broker.open_orders.pop()
+        n = len(broker.requests)
+        E.send(p1, True, sleep=0)
+        assert len(broker.requests) > n
+
+    def test_the_gross_check_counts_a_siblings_pending_orders_as_filled(self):
+        a = {"orders": [{"ticker": "AAA", "quantity": 10.0, "usd": 500.0}]}
+        b = {"orders": [{"ticker": "AAA", "quantity": 5.0, "usd": 250.0}, {"ticker": "CCC", "quantity": -2.0, "usd": 40.0}]}
+        m = {o["ticker"]: (o["quantity"], o["usd"]) for o in E.merged_orders([a, b])["orders"]}
+        assert m == {"AAA": (15.0, 750.0), "CCC": (-2.0, 40.0)}
+
+
+class TestDayOrders:
+    """Amendment A31: one market day order per line, sendable while the market is open; tranches settled from their own orders' fills."""
+
+    def test_a_line_is_one_market_day_order_for_its_whole_quantity(self, monkeypatch):
+        monkeypatch.setattr(E, "DAY_ORDERS", True)
+        assert E.alpaca_orders({"ticker": "AAA", "quantity": 8.5878}, "h" * 64, 3) == [
+            {"symbol": "AAA", "qty": "8.5878", "side": "buy", "type": "market", "time_in_force": "day", "client_order_id": "h" * 24 + "-3"}]
+        assert E.alpaca_orders({"ticker": "BBB", "quantity": -49.0}, "h" * 64, 0)[0]["qty"] == "49"
+
+    def test_fills_settle_each_tranche_only_when_the_tranches_add_up_to_the_broker(self):
+        LG.record_batch(LG.load(), 3, {"OLD": 10.0})
+        base = {k: v for i in (1, 2) for k, v in LG.tranche(LG.load(), i).items()}
+        assert not base                                                                  # only tranches 0 and 3 hold anything here
+        a = {"plan_hash": "a" * 64, "tranche": 0, "held": LG.tranche(LG.load(), 0)}
+        t0 = dict(a["held"])
+        b = {"plan_hash": "b" * 64, "tranche": 3, "held": {"OLD": 10.0}}
+        orders = [{"client_order_id": "a" * 24 + "-0", "symbol": "AAA", "side": "buy", "filled_qty": "3"},
+                  {"client_order_id": "b" * 24 + "-0", "symbol": "OLD", "side": "sell", "filled_qty": "4"},
+                  {"client_order_id": "b" * 24 + "-1", "symbol": "AAA", "side": "buy", "filled_qty": "0"},
+                  {"client_order_id": "elsewhere-0", "symbol": "ZZZ", "side": "buy", "filled_qty": "9"}]
+        new = E.settle_from_fills([a, b], orders, {**t0, "AAA": 3.0, "OLD": 6.0})
+        assert new == {0: {**t0, "AAA": 3.0}, 3: {"OLD": 6.0}}
+        with pytest.raises(E.Refused, match="do not add up"):
+            E.settle_from_fills([a, b], orders, {**t0, "AAA": 3.0, "OLD": 7.0})
+        with pytest.raises(E.Refused, match="ledger is not what plan"):
+            E.settle_from_fills([{**b, "held": {}}], orders, {**t0, "OLD": 6.0})

@@ -40,6 +40,13 @@ class TestLoadBridge:
         with pytest.raises(CiqFormatError, match=r"SP_EPS_STDDEV_EST\|FQ\+1"):
             CB.load_bridge(bridge_file(tmp_path / "b.xlsx", [company("12345678X")], drop=("SP_EPS_STDDEV_EST|FQ+1",)))
 
+    def test_a_file_without_the_fy1_mean_takes_it_from_the_estimates_file_by_cusip8(self, tmp_path):
+        p = bridge_file(tmp_path / "b.xlsx", [company("12345678X"), company("87654321Y")], drop=(CB.FY1,))
+        f = CB.load_bridge(p, pd.Series([3.0], index=["12345678"]))
+        assert f.table[CB.FY1].iloc[0] == 3.0 and np.isnan(f.table[CB.FY1].iloc[1])
+        with pytest.raises(CiqFormatError, match=r"SP_EPS_EST\|FY\+1"):
+            CB.load_bridge(p)                                                           # without the estimates the column is still required
+
     def test_columns_with_different_as_of_dates_are_refused(self, tmp_path):
         with pytest.raises(CiqFormatError, match="one as-of date"):
             CB.load_bridge(bridge_file(tmp_path / "b.xlsx", [company("12345678X")], asof_of={"SP_EST_ACT_REV|FQ0": "09/01/2026"}))

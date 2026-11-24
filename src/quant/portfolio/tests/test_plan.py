@@ -134,8 +134,34 @@ def test_a_name_the_tranche_holds_but_the_new_book_dropped_is_sold_not_silently_
     assert sells == {"BBB": -4.0} and not [s for s in p["skipped"] if s["reason"] == "no_price"]
 
 
+def test_a_fractional_long_the_book_now_shorts_is_closed_and_its_short_waits_for_the_next_slot(tmp_path, yahoo, no_network):
+    """Amendment A25: selling 3.5 held shares into a whole-share short would be one fractional short sale, which the engine refuses with the whole plan."""
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [1.2, -0.2], "side": ["long", "short"]}).to_csv(f, index=False)
+    f.with_suffix(".json").write_text(json.dumps({"short_fraction": 0.2, "overlay_state": {"exposure_now": 1.0}}))
+    p = P.plan_from_target(f, 10000.0, 1.0, dt.date(2026, 10, 27), held={"BBB": 3.5})
+    assert {o["ticker"]: o["quantity"] for o in p["orders"] if o["ticker"] == "BBB"} == {"BBB": -3.5} and p["short_deferred"] == ["BBB"]
+    assert "short_deferred" not in P.plan_from_target(f, 10000.0, 1.0, dt.date(2026, 10, 27), held={"BBB": -10.0})   # an existing short is resized as before
+
+
 def test_a_dropped_short_is_covered_with_a_buy(tmp_path, yahoo, no_network):
     f = tmp_path / "book.csv"
     pd.DataFrame({"line": ["AAA"], "ticker": ["AAA"], "w": [1.0]}).to_csv(f, index=False)
     p = P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 10, 27), held={"BBB": -3.0})
     assert {o["ticker"]: o["quantity"] for o in p["orders"] if o["ticker"] == "BBB"} == {"BBB": 3.0}
+
+
+def test_a_plan_for_another_tranche_needs_a_catch_up_listed_for_that_slot(tmp_path, yahoo, no_network):
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(f, index=False)
+    assert P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 11, 24), tranche=3)["tranche"] == 3           # A30's catch-up day
+    with pytest.raises(ValueError, match="cannot be planned on the slot of 2026-12-01"):
+        P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 12, 1), tranche=3)
+
+
+def test_two_empty_tranches_planned_on_the_same_book_get_different_hashes(tmp_path, yahoo, no_network):
+    f = tmp_path / "book.csv"
+    pd.DataFrame({"line": ["AAA", "BBB"], "ticker": ["AAA", "BBB"], "w": [0.6, 0.4]}).to_csv(f, index=False)
+    a, b = (P.plan_from_target(f, 10000.0, 0.5, dt.date(2026, 11, 24), tranche=t) for t in (0, 1))          # to-do F6: the A30 collision
+    assert a["orders"] == b["orders"] and a["plan_hash"] != b["plan_hash"]
+    assert a["plan_hash"] == P.plan_hash(a["orders"], 10000.0, 0)

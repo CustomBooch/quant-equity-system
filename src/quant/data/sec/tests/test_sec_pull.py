@@ -95,8 +95,8 @@ class TestDownloads:
         pd.DataFrame({"filingDate": pd.to_datetime(["2026-09-14"])}).to_parquet(subs)
         monkeypatch.setattr(SP, "SUBS", subs)
         monkeypatch.setattr(SP, "REPO", tmp_path)
-        (tmp_path / "data/raw_ext/old").mkdir(parents=True)
-        pd.DataFrame({"accession": ["x-1"], "form": ["8-K"], "filingDate": pd.to_datetime(["2026-09-20"]), "items": ["5.02"], "cik": [1]}).to_parquet(tmp_path / "data/raw_ext/old/items.parquet")
+        (tmp_path / "data/raw/SEC/old").mkdir(parents=True)
+        pd.DataFrame({"accession": ["x-1"], "form": ["8-K"], "filingDate": pd.to_datetime(["2026-09-20"]), "items": ["5.02"], "cik": [1]}).to_parquet(tmp_path / "data/raw/SEC/old/items.parquet")
         out.mkdir()
         pd.DataFrame({"form": ["8-K"] * 3, "kind": ["8k"] * 3, "cik": [1, 2, 3], "filingDate": pd.to_datetime(["2026-09-20", "2026-10-20", "2026-11-05"]),
                       "accession": ["x-1", "y-1", "z-1"]}).to_parquet(out / "index.parquet")

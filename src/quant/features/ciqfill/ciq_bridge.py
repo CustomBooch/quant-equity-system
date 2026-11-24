@@ -24,10 +24,11 @@ import pandas as pd
 from quant.data.capiq.ciq import CiqFormatError, cell_date, numeric, screening_sheet
 from quant.data.capiq.ids import cusip8
 
-MONTHS = {6: "Jun", 7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct"}
+MONTHS = {6: "Jun", 7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
 SURP_WINDOW_DAYS = 120
 REQUIRED = ["SP_EPS_EST|FY+1", "SP_EPS_EST|FY+2", "SP_REV_EST|FY+1", "SP_EPS_STDDEV_EST|FQ+1", "SP_EST_ACT_REV|FQ0", "SP_EST_REV_DIFF|FQ0"] + \
     [f"{m}|FQ{q}" for m in ("SP_EST_ACT_EPS", "SP_EST_EPS_DIFF") for q in ("0", "-1", "-2", "-3")]
+FY1 = "SP_EPS_EST|FY+1"
 SURP_COLS = ["surprise_sym", "surprise_disp", "pos_surprise_4q", "sales_surprise_sym"]
 CONS_COLS = ["fy2_growth", "rev_sal_fy1_1m"]
 
@@ -45,18 +46,21 @@ def path_for(ciq_dir: Path, month: pd.Timestamp) -> Path:
     return Path(ciq_dir) / f"CapIQ_{MONTHS[month.month]}_bridge.xlsx"
 
 
-def load_bridge(path: str | Path) -> BridgeFile:
+def load_bridge(path: str | Path, fy1_by_cusip8: pd.Series | None = None) -> BridgeFile:
     """Read and validate one bridge export (module docstring); CiqFormatError if SP_CUSIP or a REQUIRED column is missing or the columns do not share
-    one as-of date on the first of a month."""
+    one as-of date on the first of a month. From November 2026 the export leaves out the FY+1 EPS mean, which the estimates file of the same date
+    carries: pass it as `fy1_by_cusip8` (FY+1 mean indexed by CUSIP8) and it fills that column (the wiki page Home 5b)."""
     rows, r0 = screening_sheet(path)
     mnem, period, asof = rows.get(r0 + 1, {}), rows.get(r0 + 2, {}), rows.get(r0 + 3, {})
     key = {c: f"{(v or '').strip()}|{(period.get(c) or '').strip()}" for c, v in mnem.items() if v}
     col_of = {k: c for c, k in key.items()}
     cus = next((c for c, v in mnem.items() if (v or "").strip() == "SP_CUSIP"), None)
-    missing = [k for k in REQUIRED if k not in col_of]
+    from_est = fy1_by_cusip8 is not None and FY1 not in col_of
+    need = [k for k in REQUIRED if not (from_est and k == FY1)]
+    missing = [k for k in need if k not in col_of]
     if cus is None or missing:
         raise CiqFormatError(f"missing columns: {(['SP_CUSIP'] if cus is None else []) + missing}")
-    dates = {cell_date(asof.get(col_of[k])) for k in REQUIRED}
+    dates = {cell_date(asof.get(col_of[k])) for k in need}
     if len(dates) != 1 or None in dates:
         raise CiqFormatError(f"the columns do not share one as-of date: {sorted(str(d) for d in dates)}")
     a = cast(pd.Timestamp, dates.pop())                                            # not None: checked just above
@@ -66,11 +70,13 @@ def load_bridge(path: str | Path) -> BridgeFile:
     for r in sorted(k for k in rows if k >= r0 + 4):
         cells = rows[r]
         if (cells.get(cus) or "").strip():
-            recs.append({"cusip9": cells.get(cus), **{k: cells.get(col_of[k]) for k in REQUIRED}})
+            recs.append({"cusip9": cells.get(cus), **{k: cells.get(col_of[k]) for k in need}})
     df = pd.DataFrame(recs)
-    for k in REQUIRED:
+    for k in need:
         df[k] = numeric(df[k])
     df["cusip8"] = cusip8(df["cusip9"])
+    if from_est and fy1_by_cusip8 is not None:
+        df[FY1] = df["cusip8"].map(fy1_by_cusip8[~fy1_by_cusip8.index.duplicated()])
     return BridgeFile(a, df, str(path))
 
 

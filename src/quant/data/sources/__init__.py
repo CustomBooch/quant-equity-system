@@ -2,7 +2,7 @@
 
     base        Dataset (the declaration), DataSource (fetch), conform and validate (the point-in-time checks every pull passes)
     registry    @register, discover (imports every module in plugins/), get
-    store       pull (fetch -> check -> record/data/sources/<name>/<date>/ with a manifest), load (newest pull, optionally as of a date)
+    store       pull (fetch -> check -> record/data/derived/sources/<name>/<date>/ with a manifest), load (newest pull, optionally as of a date)
     files       FileSource: a dataset read from a file exported by hand (CSV, Parquet, Excel)
     plugins     one module per source (none registered yet: the wiki page Adding-a-dataset)
     cli         `tools/py -m quant data list | show | pull | check`

@@ -36,3 +36,8 @@ def test_overlay_refuses_missing_market_data_instead_of_defaulting_to_full_expos
     for close, mean in ((float("nan"), 100.0), (90.0, float("nan")), (float("inf"), 100.0)):
         with pytest.raises(ValueError, match="finite"):
             S.overlay_exposure(close, mean)
+
+
+def test_only_the_slots_own_tranche_is_plannable_except_on_an_amended_catch_up_day():
+    assert S.plannable(dt.date(2026, 12, 1), S.tranche_of(dt.date(2026, 12, 1))) and not S.plannable(dt.date(2026, 12, 1), 3)
+    assert all(S.plannable(dt.date(2026, 11, 24), i) for i in range(4))           # A30: the whole account moves to the model on 2026-11-24

@@ -1,6 +1,6 @@
 """Price and volume features for bridge months from the free Yahoo daily bars, using the BRIDGE workstream's validated builder (quant.features.pricefeat, unchanged).
 
-    load_yahoo          one .json.gz chart file per permno (data/external/free_2026/yahoo): daily close, split-adjusted close with dividends, volume
+    load_yahoo          one .json.gz chart file per permno (data/raw/Yahoo/free_2026/yahoo): daily close, split-adjusted close with dividends, volume
     last_close          the latest non-missing close of one stock and its date (the target book's share prices)
     market_proxy        daily market return built from the same stocks, market-equity weighted; CRSP's market return ends 2026-06-30 and a network download is not needed
     price_features      the engine's price features for a decision month (data through the end of the previous month)
@@ -57,7 +57,9 @@ def last_close(permno: int, root: Path) -> tuple[float, dt.date | None]:
         return np.nan, None
     with gzip.open(f) as g:
         r = json.load(g)["chart"]["result"][0]
-    for c, t in zip(reversed(r["indicators"]["quote"][0]["close"]), reversed(r["timestamp"]), strict=True):     # unequal lengths would pair a close with the wrong day
+    quote = (r.get("indicators") or {}).get("quote") or [{}]
+    closes, stamps = quote[0].get("close") or [], r.get("timestamp") or []          # an empty response carries neither (seen 2026-11-23, permno 82279)
+    for c, t in zip(reversed(closes), reversed(stamps), strict=True):              # unequal lengths would pair a close with the wrong day
         if c is not None:
             return float(c), pd.to_datetime(t, unit="s").date()
     return np.nan, None

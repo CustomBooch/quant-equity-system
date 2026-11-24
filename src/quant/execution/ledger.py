@@ -25,7 +25,10 @@ def record_batch(ledger: dict[str, Any], i: int, new_shares: dict[str, float], p
     out = {**ledger, str(i): {t: q for t, q in new_shares.items() if q}}
     p = path or LEDGER
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(out, indent=1, sort_keys=True), encoding="utf-8")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(out, indent=1, sort_keys=True))
+        f.flush()
+        os.fsync(f.fileno())                                    # on disk before the swap: a power cut leaves the old ledger or the new, never an empty one
     os.replace(tmp, p)
     return out
 

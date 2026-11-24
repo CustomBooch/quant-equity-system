@@ -75,5 +75,11 @@ class RecordRoot(_ConcretePath):
 
 
 REPO: Path = RecordRoot(RECORD)
-WORK_DB = REPO / "panel/_build/ext_2026-10-14e/build/work.duckdb"    # engine work database; its crsp_daily table gives the latest CUSIP and ticker of each permno
-YAHOO_DAILY = REPO / "data/external/free_2026/yahoo"                 # Yahoo daily bars, one chart file <permno>.json.gz per stock
+WORK_DB = REPO / "data/derived/builds/ext_2026-10-14e/build/work.duckdb"    # engine work database; its crsp_daily table gives the latest CUSIP and ticker of each permno
+YAHOO_DAILY = REPO / "data/raw/Yahoo/free_2026/yahoo"                 # Yahoo daily bars, one chart file <permno>.json.gz per stock (frozen: ends 2026-10-01)
+
+
+def latest_yahoo_bars(parent: Path | None = None) -> Path | None:
+    """The newest finished monthly bars folder, `yahoo_YYYY-MM-DD` with its MANIFEST.json (RUNBOOK step 2), in `parent` (default: beside YAHOO_DAILY); None if none."""
+    found = sorted(d for d in (YAHOO_DAILY.parent if parent is None else parent).glob("yahoo_????-??-??") if (d / "MANIFEST.json").exists())
+    return found[-1] if found else None

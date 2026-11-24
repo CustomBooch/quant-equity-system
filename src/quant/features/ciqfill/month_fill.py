@@ -1,9 +1,9 @@
 """November fill (lab/ciqfill/SPEC_NOV_FILL.md): the six SEC inputs of the traded model for decision month 2026-11, each behind its registered check, written as a new release.
 
-    python -m quant.features.ciqfill.month_fill --release data/master/master_2026-11-16 --base panel/_build/ext_2026-10-22a --out data/master/master_2026-11-16n
+    python -m quant.features.ciqfill.month_fill --release data/master/master_2026-11-16 --base data/derived/builds/ext_2026-10-22a --out data/master/master_2026-11-16n
 
 Families (a family whose check fails leaves its inputs as the base release has them):
-    A edgar     EDGAR counts for October (filings to 2026-09-30) and November (to 2026-10-30): the engine's events plus the form index of data/raw_ext/sec_fill_2026-11-16
+    A edgar     EDGAR counts for October (filings to 2026-09-30) and November (to 2026-10-30): the engine's events plus the form index of data/raw/SEC/sec_fill_2026-11-16
     B insider   insider inputs for November: the engine's Form 4 events (filings to 2026-09-30) plus October's original Form 4s read from EDGAR (quant.data.sec.form4)
 Only empty cells of those columns in the October and November bridge rows change; every other row is copied (gate engine_months_identical). The October fill's helpers are reused
 (quant.features.ciqfill.full_fill), so the definitions and checks are the same code.
@@ -26,7 +26,7 @@ from quant.features.ciqfill import activity_families as af
 from quant.features.ciqfill import full_fill as FF
 
 SPEC = REPO / "lab/ciqfill/SPEC_NOV_FILL.md"
-SEC_FILL = REPO / "data/raw_ext/sec_fill_2026-11-16"
+SEC_FILL = REPO / "data/raw/SEC/sec_fill_2026-11-16"
 OCT, NOV = pd.Timestamp("2026-10-01"), pd.Timestamp("2026-11-01")
 EDGAR_END = {OCT: pd.Timestamp("2026-09-30"), NOV: pd.Timestamp("2026-10-30")}       # last filing date known before each decision month
 INSIDER_END = pd.Timestamp("2026-10-30")                                            # coverage end of the November insider rule

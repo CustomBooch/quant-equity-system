@@ -1,6 +1,6 @@
 """Read-only pull of the Alpaca paper account's active US equity assets (PAPER amendment A10), stored for quant.data.instruments.alpaca.
 
-    dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets     # -> data/raw_ext/alpaca_<date>/assets.json
+    dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets     # -> data/raw/Alpaca/alpaca_<date>/assets.json
 """
 from __future__ import annotations
 

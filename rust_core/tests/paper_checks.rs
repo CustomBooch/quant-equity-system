@@ -33,7 +33,7 @@ fn hash(p: &Value) -> String {
 /// The plan with its orders replaced and its hash recomputed, so only the order-content gates can object.
 fn with_orders(orders: Vec<Value>, account: f64) -> Value {
     let acct = Value::Float(account);
-    let h = plan_hash(&orders, &acct);
+    let h = plan_hash(&orders, &acct, None);
     alpaca(Value::obj([("orders", Value::Arr(orders)), ("skipped", Value::Arr(vec![])), ("account_value_usd", acct), ("plan_hash", Value::Str(h))]))
 }
 

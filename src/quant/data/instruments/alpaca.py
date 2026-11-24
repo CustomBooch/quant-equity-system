@@ -1,6 +1,6 @@
 """Alpaca instrument list and CRSP -> Alpaca symbol mapping (PAPER amendment A10). The list is pulled read-only by quant.execution.brokers.alpaca.pull_assets; this module reads local files only.
 
-    dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets     # (read-only) -> data/raw_ext/alpaca_<date>/assets.json
+    dotenvx run -- python -m quant.execution.brokers.alpaca.pull_assets     # (read-only) -> data/raw/Alpaca/alpaca_<date>/assets.json
 
 Mapping: the latest CRSP ticker of a permno (quant.data.instruments.crsp.crsp_ids) is the Alpaca symbol when that symbol is active and tradable. Otherwise, CRSP keeps the
 share class apart from the ticker (BRK, BF, MOG), so the one tradable Alpaca symbol of the form TICKER.X is used when there is exactly one. Else no line."""
@@ -19,7 +19,7 @@ COLUMNS = ["symbol", "name", "status", "tradable", "fractionable", "shortable", 
 
 
 def assets_file(day: str = "*") -> Path:
-    return REPO / f"data/raw_ext/alpaca_{day}/assets.json"
+    return REPO / f"data/raw/Alpaca/alpaca_{day}/assets.json"
 
 
 def latest_assets_file() -> Path | None:

@@ -3,7 +3,7 @@
     python -m quant.data.free.archive snapshot [--limit N]   # archive today's free inputs for the investable universe (restartable)
     python -m quant.data.free.archive reconcile PATH_TO_LICENSED_FEATURES.parquet   # after a licensed pull
 
-Archive layout: data/raw_ext/bridge_archive/<YYYY-MM-DD>/{analyst.parquet, prices.parquet, MANIFEST.json}. Personal-use Yahoo data; nothing here is published.
+Archive layout: data/derived/bridge_archive/<YYYY-MM-DD>/{analyst.parquet, prices.parquet, MANIFEST.json}. Personal-use Yahoo data; nothing here is published.
 Reconcile compares archived-and-derived features with licensed-built features of the same (permno, month) using the acceptance rule of SPEC_S2.
 """
 
@@ -23,13 +23,13 @@ from quant.core.paths import REPO
 from quant.core.release import sha256_file
 from quant.core.release.release import utc_stamp
 
-ARCHIVE = REPO / "data/raw_ext/bridge_archive"
+ARCHIVE = REPO / "data/derived/bridge_archive"
 MIN_COVERAGE, MIN_RANK_CORR = 0.70, 0.90
 ANALYST_FEATURES = ["numest_fy1", "disp_fy1", "rev_fy1_1m", "rev_fy1_3m", "updown_fy1", "fy2_growth", "pos_surprise_4q", "surprise_sym", "surprise_disp"]
 
 
 def latest_day(required: str) -> Path:
-    """Newest archive day folder (data/raw_ext/bridge_archive/<YYYY-MM-DD>) that contains `required`."""
+    """Newest archive day folder (data/derived/bridge_archive/<YYYY-MM-DD>) that contains `required`."""
     days = sorted(p.name for p in ARCHIVE.iterdir() if (p / required).exists())
     if not days:
         raise FileNotFoundError(f"no archive day under {ARCHIVE} contains {required}")

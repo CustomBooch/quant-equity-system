@@ -1,6 +1,6 @@
 """Excel workbook for pulling Capital IQ analyst estimates for the investable universe, with the formulas filled in.
 
-    python -m quant.data.capiq.request_workbook --panel data/master/master_2026-10-23/master_panel.parquet --state panel/_build/ext_2026-10-22a/build/tables/security_state.parquet \
+    python -m quant.data.capiq.request_workbook --panel data/master/master_2026-10-23/master_panel.parquet --state data/derived/builds/ext_2026-10-22a/build/tables/security_state.parquet \
         --out data/master/ciq_estimates_request_2026-10-23.xlsx
 
 Universe: stocks that are in_investable in any month from 2026-06 on, with identifiers from the end-of-June CRSP state (ticker, CUSIP8 and the computed 9th check digit), biggest first.

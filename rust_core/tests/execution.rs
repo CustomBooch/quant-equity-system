@@ -202,7 +202,7 @@ fn alpaca_plan(tickers: &[&str], broker: &str) -> Value {
     let orders: Vec<String> = tickers.iter().map(|t| format!("{{\"ticker\": \"{t}\", \"quantity\": 1.0, \"usd\": 100.0, \"side\": \"BUY\"}}")).collect();
     let body = format!("{{\"orders\": [{}], \"account_value_usd\": 10000}}", orders.join(", "));
     let mut plan = parse(&body).unwrap();
-    let h = rust_core::execution::plan_hash(plan.get("orders").unwrap().as_arr().unwrap(), plan.get("account_value_usd").unwrap());
+    let h = rust_core::execution::plan_hash(plan.get("orders").unwrap().as_arr().unwrap(), plan.get("account_value_usd").unwrap(), None);
     let with = format!("{{\"orders\": [{}], \"account_value_usd\": 10000, \"plan_hash\": \"{h}\", \"broker\": \"{broker}\", \"held\": {{}}}}", orders.join(", "));
     plan = parse(&with).unwrap();
     plan
@@ -242,7 +242,7 @@ fn levered_plan(orders: &[(&str, f64, f64)], held: &[(&str, f64)], short_fractio
         .collect();
     let body = format!("{{\"orders\": [{}], \"account_value_usd\": 100000}}", os.join(", "));
     let tmp = parse(&body).unwrap();
-    let h = plan_hash(tmp.get("orders").unwrap().as_arr().unwrap(), tmp.get("account_value_usd").unwrap());
+    let h = plan_hash(tmp.get("orders").unwrap().as_arr().unwrap(), tmp.get("account_value_usd").unwrap(), None);
     let hs: Vec<String> = held.iter().map(|(t, q)| format!("\"{t}\": {q:?}")).collect();
     let sf = short_fraction.map(|s| format!(", \"short_fraction\": {s:?}")).unwrap_or_default();
     let sf = sf + &leverage.map(|k| format!(", \"leverage\": {k:?}")).unwrap_or_default();
@@ -317,4 +317,18 @@ fn a_nan_infinite_or_non_positive_account_value_is_a_reason_not_to_send() {
         let r = pre_trade_checks(&plan, false, true, Some("x")).unwrap();
         assert!(r.iter().any(|m| m.contains("not a finite positive number")), "{acct}: {r:?}");
     }
+}
+
+
+#[test]
+fn two_tranches_with_the_same_orders_get_different_hashes_and_a_tranche_moved_after_hashing_is_caught() {
+    use rust_core::execution::pre_trade_checks;
+    let o = parse("[{\"ticker\": \"A_US_EQ\", \"quantity\": 1.0, \"usd\": 100.0, \"side\": \"BUY\"}]").unwrap();
+    let (orders, acct) = (o.as_arr().unwrap(), Value::Float(10000.0));
+    let (h0, h1) = (plan_hash(orders, &acct, Some(&Value::Int(0))), plan_hash(orders, &acct, Some(&Value::Int(1))));
+    assert_ne!(h0, h1);
+    assert_eq!(plan_hash(orders, &acct, Some(&Value::Null)), plan_hash(orders, &acct, None));
+    let plan = |t: i64, h: &str| parse(&format!("{{\"orders\": [{{\"ticker\": \"A_US_EQ\", \"quantity\": 1.0, \"usd\": 100.0, \"side\": \"BUY\"}}], \"account_value_usd\": 10000.0, \"tranche\": {t}, \"plan_hash\": \"{h}\"}}")).unwrap();
+    assert!(pre_trade_checks(&plan(0, &h0), false, true, Some(&h0)).unwrap().is_empty());
+    assert!(pre_trade_checks(&plan(1, &h0), false, true, Some(&h0)).unwrap().contains(&"plan changed since it was written".to_string()));
 }

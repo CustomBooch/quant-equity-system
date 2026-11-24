@@ -10,8 +10,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ALLOWED = {"src/quant/execution/engine.py"}
 WRITE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
-# modules allowed to POST, and only to this machine (the news sentiment module that posted to a local Ollama was archived on 2026-11-17)
-LOOPBACK_ONLY: set[str] = set()
+# modules allowed to POST, and only to this machine (the news sentiment module that posted to a local Ollama was archived on 2026-11-17; the forward 8-K
+# scorer's local model client was added 2026-11-19, owner request)
+LOOPBACK_ONLY: set[str] = {"src/quant/research/news/local_llm.py"}
 LOOPBACK = ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")
 
 

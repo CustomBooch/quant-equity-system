@@ -125,10 +125,14 @@ fn round_account(v: &Value) -> Value {
     }
 }
 
-/// SHA-256 of `json.dumps({"orders": orders, "account_value_usd": round(account, 2)}, sort_keys=True)`.
-pub fn plan_hash(orders: &[Value], account_value_usd: &Value) -> String {
-    let payload = Value::obj([("orders", Value::Arr(orders.to_vec())), ("account_value_usd", round_account(account_value_usd))]);
-    sha256_hex(dumps_sorted(&payload).as_bytes())
+/// SHA-256 of `json.dumps({"orders": orders, "account_value_usd": round(account, 2)}, sort_keys=True)`, with `"tranche"` added when the plan names one
+/// (to-do F6, as `quant.portfolio.plan.plan_hash`). A missing or null tranche hashes as before, so the frozen reference's fixtures still agree.
+pub fn plan_hash(orders: &[Value], account_value_usd: &Value, tranche: Option<&Value>) -> String {
+    let mut kv = vec![("orders".to_string(), Value::Arr(orders.to_vec())), ("account_value_usd".to_string(), round_account(account_value_usd))];
+    if let Some(t) = tranche.filter(|t| !matches!(t, Value::Null)) {
+        kv.push(("tranche".to_string(), t.clone()));
+    }
+    sha256_hex(dumps_sorted(&Value::Obj(kv)).as_bytes())
 }
 
 /// Orders that move `held` a fraction of the way to `target`. Returns the plan as a JSON value with keys orders, skipped, account_value_usd, plan_hash.
@@ -161,7 +165,7 @@ pub fn make_plan(target: &BTreeMap<String, f64>, held: &BTreeMap<String, f64>, p
         }
         orders.push(order_value(t, d, round_py(usd, 2), if d > 0.0 { "BUY" } else { "SELL" }));
     }
-    let hash = plan_hash(&orders, account_value_usd);
+    let hash = plan_hash(&orders, account_value_usd, None);
     Value::obj([("orders", Value::Arr(orders)), ("skipped", Value::Arr(skipped)), ("account_value_usd", account_value_usd.clone()), ("plan_hash", Value::Str(hash))])
 }
 
@@ -191,7 +195,7 @@ pub fn pre_trade_checks(plan: &Value, kill_switch_on: bool, preflight_go: bool, 
     if !preflight_go {
         reasons.push("preflight is not GO".to_string());
     }
-    if plan_hash(orders, account) != recorded {
+    if plan_hash(orders, account, plan.get("tranche")) != recorded {
         reasons.push("plan changed since it was written".to_string());
     }
     if owner_confirmed_hash != Some(recorded) {

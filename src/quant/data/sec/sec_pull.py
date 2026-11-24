@@ -6,7 +6,7 @@ index   EDGAR full-index form.idx for 2026 QTR3 and QTR4 -> index.parquet (8-K, 
 items   submissions API for each CIK that filed an 8-K after the local submissions extract ends, for the item numbers -> items.parquet
 ftd     cnsfails half-month zips 2026-06 to 2026-09 -> ftd/
 f13     Form 13F data sets by filing window, 2025-09 to 2026-08 -> f13/
-All files go to data/raw_ext/sec_live_2026-10-26 with a MANIFEST.json (URL, bytes, SHA-256, UTC time). The contact string is read from the environment and is never written to a file.
+All files go to data/raw/SEC/sec_live_2026-10-26 with a MANIFEST.json (URL, bytes, SHA-256, UTC time). The contact string is read from the environment and is never written to a file.
 0.4 s between requests; no retry loops; an existing file is never downloaded again.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pandas as pd
 from quant.core.sql import one_row
 from quant.core.paths import REPO
 
-OUT = REPO / "data/raw_ext" / os.environ.get("SEC_PULL_DIR", "sec_live_2026-10-26")      # a later pull goes to its own folder: SEC_PULL_DIR=sec_fill_<date>
+OUT = REPO / "data/raw/SEC" / os.environ.get("SEC_PULL_DIR", "sec_live_2026-10-26")      # a later pull goes to its own folder: SEC_PULL_DIR=sec_fill_<date>
 SUBS = REPO / "data/raw/SEC/edgar_submissions/edgar_submissions.parquet"
 SEC = "https://www.sec.gov"
 FORMS = {"8-K": "8k", "NT 10-K": "nt", "NT 10-Q": "nt", "SC 13D": "sc13d", "SC 13D/A": "sc13d", "SCHEDULE 13D": "sc13d", "SCHEDULE 13D/A": "sc13d"}
@@ -108,11 +108,11 @@ def index() -> None:
 
 
 def reusable_items(folder: str | None) -> pd.DataFrame:
-    """The items rows an earlier pull already holds (SEC_PULL_REUSE=<folder under data/raw_ext>), so only 8-Ks it lacks are requested again; empty when none is named."""
+    """The items rows an earlier pull already holds (SEC_PULL_REUSE=<folder under data/raw/SEC>), so only 8-Ks it lacks are requested again; empty when none is named."""
     cols = ["accession", "form", "filingDate", "items", "cik"]
     if not folder:
         return pd.DataFrame(columns=cols)
-    return pd.read_parquet(REPO / "data/raw_ext" / folder / "items.parquet")[cols]
+    return pd.read_parquet(REPO / "data/raw/SEC" / folder / "items.parquet")[cols]
 
 
 def items() -> None:

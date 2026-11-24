@@ -1,7 +1,7 @@
 """READY pre-flight: a read-only go / no-go check to run before any trading step. python -m quant.execution.preflight [--no-account]
 Checks (nothing is written except results/preflight.json; no order endpoint exists in this module):
   1. data freshness: latest scored month of the traded score against today; the READY rule is that a score may be at most one month old (stale-input backtest, rails.py). Since PAPER amendment A4
-     the traded score is EXAMPLE from quant.models.scores (the frozen C3 ledger month is still reported, for information only)
+     the traded score is quant.models.scores' (EXAMPLE) (the frozen C3 ledger month is still reported, for information only)
   2. frozen artefacts intact
   3. instrument list age and mapping coverage of the latest scored top decile (rails: refuse if more than 5% of target weight is unmappable)
   4. Alpaca paper account state through GET (status, shorting, margin, equity, positions), if keys are present
@@ -36,7 +36,7 @@ CheckResult = TypedDict("CheckResult", {"pass": bool, "detail": str})
 
 
 def latest_paper_scores() -> str | None:
-    """Newest decision month with a EXAMPLE score file (PAPER amendment A4: the score that is traded)."""
+    """Newest decision month with a traded score file (PAPER amendments A4, A27)."""
     from quant.models import scores as SC
 
     r = SC.latest()
@@ -50,11 +50,11 @@ def paper_mapping() -> dict[str, Any]:
 
     latest = SC.latest()
     if latest is None:
-        raise FileNotFoundError(f"no EXAMPLE score file in {SC.OUT}")
+        raise FileNotFoundError(f"no traded score file in {SC.OUT}")
     _, f = latest
     pol = TG.POLICIES[TG.PRIMARY]
     col = line_column(BROKER)
-    sel = TG.map_lines(TG.select(pd.read_parquet(f).set_index("permno").rename(columns={"me_lag": "mcap"}), pol), BROKER)
+    sel = TG.map_alpaca(TG.select(pd.read_parquet(f).set_index("permno").rename(columns={"me_lag": "mcap"}), pol))
     return {"selected": int(len(sel)), "mapped": int(sel[col].notna().sum()), "weight_dropped_before_renormalisation": TG.unmapped_share(sel, pol, col)}
 
 
@@ -82,14 +82,14 @@ def instrument_list_date() -> str | None:
 
 
 def score_freshness(today: dt.date) -> tuple[bool, str]:
-    """Check 1: the newest EXAMPLE decision month is the current month or the previous one."""
+    """Check 1: the newest traded-score decision month is the current month or the previous one."""
     sm = latest_paper_scores()
     if not sm:
         return False, "no scored month found"
     age = months_between(sm, today)              # a score for decision month M uses inputs through the end of M-1, so its age is measured from the start of M
     if age < 0:
-        return False, f"latest EXAMPLE decision month {sm} is after today ({today}): a score cannot be dated in the future"
-    return age <= MAX_SCORE_AGE_MONTHS + 1.0, f"latest EXAMPLE decision month {sm}; age {age:.1f} months from the start of that month (rule: decision month must be the current month or the previous one)"
+        return False, f"latest traded-score decision month {sm} is after today ({today}): a score cannot be dated in the future"
+    return age <= MAX_SCORE_AGE_MONTHS + 1.0, f"latest traded-score decision month {sm}; age {age:.1f} months from the start of that month (rule: decision month must be the current month or the previous one)"
 
 
 def frozen_artefacts(today: dt.date) -> tuple[bool, str]:
@@ -131,7 +131,7 @@ def account_reachable(today: dt.date) -> tuple[bool, str]:
 
 def analyst_archive_age(today: dt.date) -> tuple[bool, str]:
     """Check 5: a Yahoo analyst snapshot at most 35 days old exists."""
-    files = sorted(glob.glob(str(REPO / "data/raw_ext/yahoo_analyst_archive/snapshot_*.parquet")))
+    files = sorted(glob.glob(str(REPO / "data/raw/Yahoo/yahoo_analyst_archive/snapshot_*.parquet")))
     d = Path(files[-1]).name.removeprefix("snapshot_")[:10] if files else None
     return (False, "no archive") if d is None else (0 <= (today - dt.date.fromisoformat(d)).days <= 35, f"latest Yahoo analyst snapshot {d}")
 

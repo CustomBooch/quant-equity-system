@@ -1,7 +1,7 @@
 """Extend the SEC Form 4 insider-transaction archives (SEC DERA "Insider Transactions Data Sets", public domain) for the extended build.
 
     SEC_CONTACT="<contact string>" python -m quant.data.sec.sec_form4 [--through 2026q2]
-    -> data/raw_ext/six_2026-10-13/sec_insider/YYYYqN.zip   (existing archives hard-linked from data/external/sec_insider, new quarters downloaded)
+    -> data/raw/SEC/sec_insider/YYYYqN.zip   (existing archives hard-linked from data/raw/SEC/sec_insider_frozen, new quarters downloaded)
 
 SEC's fair-access policy requires a User-Agent that identifies the requester with contact details. The contact is read from the SEC_CONTACT environment variable and is
 never written to a file. Existing archives are not modified. Only complete quarters up to --through are fetched; 0.5 s between requests.
@@ -19,8 +19,8 @@ from collections.abc import Iterator
 
 from quant.core.paths import REPO
 
-SRC = REPO / "data/external/sec_insider"
-DST = REPO / "data/raw_ext/six_2026-10-13/sec_insider"
+SRC = REPO / "data/raw/SEC/sec_insider_frozen"
+DST = REPO / "data/raw/SEC/sec_insider"
 URLS = ["https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{q}_form345.zip",
         "https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/{q}_form345.zip"]      # SEC moved the files from 2026q2
 

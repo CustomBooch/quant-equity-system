@@ -15,6 +15,7 @@ import urllib.request
 
 import pytest
 
+from quant.core.paths import latest_yahoo_bars
 from quant.data.yahoo import yahoo_bars as YB
 from quant.features.ciqfill import yahoo_price as yp
 from quant.features.ciqfill.tests.factories import chart, write_chart
@@ -103,6 +104,18 @@ def test_a_network_error_is_retried_and_raised_when_it_persists(tmp_path, src, y
     yahoo.fail = YB.TRIES
     with pytest.raises(urllib.error.URLError):
         YB.refresh(src, tmp_path / "b", END)
+
+
+def test_a_stopped_refresh_leaves_no_manifest_so_it_is_not_taken_as_finished_and_resumes_to_one(tmp_path, src, yahoo, monkeypatch):
+    real = YB.fetch
+    monkeypatch.setattr(YB, "fetch", lambda url, pause: real(url, pause) if "AAA" in url else (_ for _ in ()).throw(urllib.error.URLError("down")))
+    with pytest.raises(urllib.error.URLError):
+        YB.refresh(src, tmp_path / "yahoo_2026-10-30", END)
+    assert not (tmp_path / "yahoo_2026-10-30/MANIFEST.json").exists() and (tmp_path / "yahoo_2026-10-30/MANIFEST.partial.json").exists()
+    assert latest_yahoo_bars(tmp_path) is None
+    monkeypatch.setattr(YB, "fetch", real)
+    YB.refresh(src, tmp_path / "yahoo_2026-10-30", END)
+    assert latest_yahoo_bars(tmp_path) == tmp_path / "yahoo_2026-10-30" and not (tmp_path / "yahoo_2026-10-30/MANIFEST.partial.json").exists()
 
 
 def test_a_page_that_is_not_a_chart_is_retried_not_taken_for_a_missing_symbol(tmp_path, src, yahoo):

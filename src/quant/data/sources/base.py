@@ -6,12 +6,21 @@ point-in-time load and the monthly join, is shared (`quant.data.sources.store`, 
 from __future__ import annotations
 
 import datetime as dt
+import urllib.request
 from dataclasses import dataclass, field
 from typing import ClassVar
 
 import pandas as pd
 
-ENTITIES = ("permno", "ticker", "cik", "cusip", "market")       # the key a row is about; "market" for one series per date (an index, a macro figure)
+
+def http_get(url: str, timeout: float = 60) -> bytes:
+    """The body of one GET request (a timeout or an HTTP error raises; nothing is retried)."""
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "quant-research"}), timeout=timeout) as r:
+        body: bytes = r.read()
+    return body
+
+
+ENTITIES =("permno", "ticker", "cik", "cusip", "market")       # the key a row is about; "market" for one series per date (an index, a macro figure)
 DTYPES = ("float64", "int64", "string", "bool", "date")
 
 
@@ -19,7 +28,7 @@ DTYPES = ("float64", "int64", "string", "bool", "date")
 class Dataset:
     """The declaration of one dataset.
 
-    name         lower_snake_case; the store folder (record/data/sources/<name>) and the command-line name
+    name         lower_snake_case; the store folder (record/data/derived/sources/<name>) and the command-line name
     licence      the name of its row in quant.core.licences.SOURCES (the terms it may be used under); a contract test checks the row exists
     entity       the column that names what a row is about, one of ENTITIES (its column holds that identifier)
     observed     the column with the date the value describes (a fiscal period end, a trade date)

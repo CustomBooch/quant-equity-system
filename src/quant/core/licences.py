@@ -33,6 +33,16 @@ SOURCES: tuple[Source, ...] = (                # the sources the public edition 
     Source("Yahoo Finance (bars, analyst snapshots)", UNCONFIRMED, True, "Yahoo's terms of service", ("quant.data.yahoo", "quant.data.free.archive"), "check the terms before any real-money use"),
     Source("Broker instrument list (Alpaca)", YES, True, "the broker's own account terms", ("quant.data.instruments",)),
     Source("SEC EDGAR", YES, False, "sec.gov public filings; contact address from the environment only", ("quant.data.sec",)),
+    Source("GDELT", YES, False, "gdeltproject.org Terms of Use: unrestricted use including commercial, citing the GDELT Project (https://www.gdeltproject.org/) in anything published",
+           ("quant.data.sources.plugins.gdelt_themes",)),
+    Source("Guardian Open Platform", NO, False, "developer key terms (open-platform.theguardian.com): non-commercial use, Guardian credited in anything published; a paid key is needed for commercial use",
+           ("quant.data.sources.plugins.guardian_counts",)),
+    Source("News-based indices (EPU, EMV)", UNCONFIRMED, False, "policyuncertainty.com and FRED: free to use citing Baker, Bloom and Davis; real-money use not stated",
+           ("quant.data.sources.plugins.news_indices",)),
+    Source("SF Fed news sentiment", UNCONFIRMED, False, "frbsf.org spreadsheet: a Federal Reserve Bank publication, free to use crediting the source; real-money use not stated",
+           ("quant.data.sources.plugins.sf_fed_news_sentiment",)),
+    Source("Geopolitical Risk index", UNCONFIRMED, False, "matteoiacoviello.com/gpr.htm: free to use citing Caldara and Iacoviello; real-money use not stated",
+           ("quant.data.sources.plugins.gpr_daily",)),
     Source("Data source framework", YES, False, "no data of its own: pulls, checks and stores what the plugins fetch", ("quant.data.sources",)),
 )
 

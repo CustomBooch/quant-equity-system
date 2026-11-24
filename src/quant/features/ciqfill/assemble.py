@@ -1,6 +1,6 @@
 """Assemble the master panel: the engine panel, plus Capital IQ fundamentals where the engine has gaps, plus bridge rows for months the engine cannot build.
 
-    python -m quant.features.ciqfill.assemble --base panel/_build/ext_2026-10-22a --ciq-dir "data/raw/Capital IQ" --out data/master/master_2026-10-23 --last-engine-month 2026-06-01
+    python -m quant.features.ciqfill.assemble --base data/derived/builds/ext_2026-10-22a --ciq-dir "data/raw/Capital IQ" --out data/master/master_2026-10-23 --last-engine-month 2026-06-01
 
 Why bridge rows: the engine's spine is built from CRSP trading, so a decision month with no CRSP data cannot exist in the engine (CRSP ends 2026-06-30, so the engine ends at 2026-06). A
 Capital IQ file priced at the end of month P belongs to decision month P+1. If the engine has that month it is only filled where missing; otherwise it becomes bridge rows.
@@ -44,8 +44,10 @@ from quant.core.sql import day, ident, one_row, quote
 from quant.core.paths import YAHOO_DAILY
 from quant.core.release import sha256_file, write_release
 
-FUND_KEYS = {7: "july", 8: "aug", 9: "sep", 10: "oct", 11: "nov", 12: "dec"}       # capiq_fund_<key>_2026.xlsx: the export for decision month m (priced at the end of m - 1)
+FUND_KEYS = {7: "july", 8: "aug", 9: "sep", 10: "oct", 11: "nov", 12: "dec"}       # capiq_fund_<key>_<year>.xlsx: the export for decision month m (priced at the end of m - 1)
 FIRST_FILE_MONTH, THROUGH = 7, "2026-10-01"                                        # files from July (CRSP ends with June) to the last decision month built, by default October
+FIRST_FILE = pd.Timestamp(2026, FIRST_FILE_MONTH, 1)                               # the first fundamentals file is July 2026; months run on across the year end
+EST_FIRST, EST_REQUIRED_FROM = pd.Timestamp("2026-01-01"), pd.Timestamp("2026-04-01")      # estimates: January-March 2026 optional, from April required
 MIN_MATCH, MIN_PARITY, MIN_COVER = 0.98, 0.90, 0.70
 # Capital IQ consensus estimates (thresholds set before any result was seen): capiq_est_<key>_2026.xlsx for month i is as of the first of that month; the files from
 # April to the last decision month are required, January to March are optional extras that make the 3-month features testable
@@ -68,7 +70,7 @@ INCOMPLETE = {f"fwd_incomplete_{h}m": SEAL[f"fwd_ret_{h}m"] for h in (1, 3, 6, 1
 
 Gates = dict[str, str]                       # gate name -> "pass" | "fail" (the release records every gate; a failed one never stops the build)
 Report = dict[str, Any]                      # CIQ_FILL_REPORT.json as it is built up (nested JSON values)
-Estimates = dict[str, CiqEst]                # EST_KEYS key -> the consensus export of that month
+Estimates = dict[str, CiqEst]                # month_key(month) -> the consensus export of that month
 
 
 def first_of_next_month(ts: pd.Timestamp) -> pd.Timestamp:
@@ -164,23 +166,41 @@ class Build:
         return af.ftd_features(ftd, self.shares_all, self.cov_f, permnos, m)
 
 
-def fund_files(through: pd.Timestamp) -> tuple[str, ...]:
-    """Keys of the Capital IQ fundamentals files to read, July to the decision month `through`."""
-    return tuple(FUND_KEYS[m] for m in range(FIRST_FILE_MONTH, through.month + 1))
+def month_key(m: pd.Timestamp, fund: bool = False) -> str:
+    """The key of month `m` in gate and report names: the month's abbreviation in 2026 (the names every 2026 release and waiver uses), with the year after it
+    from 2027 ('jan_2027'). Fundamentals keep 'july' for July, as their file names do."""
+    k = FUND_KEYS.get(m.month, EST_KEYS[m.month - 1]) if fund else EST_KEYS[m.month - 1]
+    return k if m.year == 2026 else f"{k}_{m.year}"
+
+
+def fund_path(ciq_dir: Path, m: pd.Timestamp) -> Path:
+    return ciq_dir / f"capiq_fund_{FUND_KEYS.get(m.month, EST_KEYS[m.month - 1])}_{m.year}.xlsx"
+
+
+def est_path(ciq_dir: Path, m: pd.Timestamp) -> Path:
+    return ciq_dir / f"capiq_est_{EST_KEYS[m.month - 1]}_{m.year}.xlsx"
+
+
+def months_between(first: pd.Timestamp, through: pd.Timestamp) -> list[pd.Timestamp]:
+    return list(pd.date_range(first, through.normalize().replace(day=1), freq="MS"))
+
+
+def fund_files(through: pd.Timestamp) -> tuple[pd.Timestamp, ...]:
+    """Decision months of the Capital IQ fundamentals files to read, July 2026 to the decision month `through` (across the year end)."""
+    return tuple(months_between(FIRST_FILE, through))
 
 
 def load_estimates(ciq_dir: Path, through: pd.Timestamp) -> Estimates:
-    """The consensus files capiq_est_<key>_2026.xlsx to the decision month `through` (from April required, January to March used when present). A missing,
-    wrong-format or wrongly dated file raises: estimates are never silently skipped."""
+    """The consensus files capiq_est_<mon>_<year>.xlsx to the decision month `through` (from April 2026 required, January to March 2026 used when present).
+    A missing, wrong-format or wrongly dated file raises: estimates are never silently skipped."""
     est = {}
-    for k in EST_KEYS[:through.month]:
-        f = ciq_dir / f"capiq_est_{k}_2026.xlsx"
-        if EST_KEYS.index(k) < 3 and not f.exists():
+    for m in months_between(EST_FIRST, through):
+        f = est_path(ciq_dir, m)
+        if m < EST_REQUIRED_FROM and not f.exists():
             continue
-        est[k] = load_est(f)
-        want = pd.Timestamp(2026, EST_KEYS.index(k) + 1, 1)
-        if est[k].asof != want:
-            raise SystemExit(f"capiq_est_{k}_2026.xlsx is as of {est[k].asof.date()}, expected {want.date()}")
+        est[month_key(m)] = e = load_est(f)
+        if e.asof != m:
+            raise SystemExit(f"{f.name} is as of {e.asof.date()}, expected {m.date()}")
     return est
 
 
@@ -223,9 +243,9 @@ def estimate_parity(src: Build, est: Estimates, s_prev: pd.DataFrame, gates: Gat
     """The Capital IQ consensus build against the engine's I/B/E/S values for the last engine month (EST_PARITY thresholds; untested below 30 stocks)."""
     last = src.last
     usable: list[str] = []
-    i0 = last.month - 1
     eng_e = src.engine(last, "permno, " + ", ".join(EST_PARITY))
-    fe, _ = est_features(est[EST_KEYS[i0]], est.get(EST_KEYS[i0 - 1]), est.get(EST_KEYS[i0 - 3]) if i0 >= 3 else None, s_prev, last, eng_e["permno"])
+    fe, _ = est_features(est[month_key(last)], est.get(month_key(last - pd.DateOffset(months=1))), est.get(month_key(last - pd.DateOffset(months=3))),
+                         s_prev, last, eng_e["permno"])
     j = eng_e.merge(fe, on="permno", suffixes=("", "_c"))
     par: dict[str, dict[str, Any]] = {}
     for c, thr in EST_PARITY.items():
@@ -279,7 +299,7 @@ def bridge_month(src: Build, key: str, rows: pd.DataFrame, state: pd.DataFrame, 
     rows = rows.merge(src.activity("insider", rows["permno"], rows.set_index("permno")["me_lag"], decision), on="permno", how="left") \
                .merge(src.activity("ftd", rows["permno"], None, decision), on="permno", how="left").merge(edgar_counts(src, rows["permno"], decision, report), on="permno", how="left")
     if est:
-        consensus_fill(rows, est, EST_KEYS[decision.month - 1], state, decision, usable, info, gates, key)       # the estimates as of the same decision month
+        consensus_fill(rows, est, month_key(decision), state, decision, usable, info, gates, key)       # the estimates as of the same decision month
     info["coverage_activity"] = coverage(rows, af.INSIDER_COLS + af.FTD_COLS + af.EDGAR_COLS)
     info["coverage_pit_families"] = fam_cov                  # informational: outside a family's admissible window it is empty by design
     info["coverage_quarterly_family"] = cov_q = coverage(rows, CHECKED)
@@ -305,10 +325,9 @@ def edgar_counts(src: Build, permnos: pd.Series, decision: pd.Timestamp, report:
 
 def consensus_fill(rows: pd.DataFrame, est: Estimates, ck: str, state: pd.DataFrame, decision: pd.Timestamp, usable: list[str], info: dict[str, Any], gates: Gates, key: str) -> None:
     """Capital IQ consensus (snapshot `ck`) fills, in place, only the rows with no I/B/E/S consensus in window, and only the features whose parity passed; never overwrites."""
-    i = EST_KEYS.index(ck)
     if est[ck].asof != decision:                                   # an explicit check, not an assert: it must also hold under python -O
         raise SystemExit(f"estimate snapshot {ck} is as of {est[ck].asof.date()}, expected {decision.date()}")
-    fe, es = est_features(est[ck], est[EST_KEYS[i - 1]], est.get(EST_KEYS[i - 3]), state, decision, rows["permno"])
+    fe, es = est_features(est[ck], est[month_key(decision - pd.DateOffset(months=1))], est.get(month_key(decision - pd.DateOffset(months=3))), state, decision, rows["permno"])
     need = rows["kd_ibes_cons"].isna().to_numpy()
     fe = fe.set_index("permno").reindex(rows["permno"]).reset_index()
     for c in [c for c in EST_COLS if c in usable]:
@@ -515,8 +534,10 @@ def run(base: Path, ciq_dir: Path, out: Path, last_engine_month: pd.Timestamp, p
     replaced: set[pd.Timestamp] = set()
     prev_inv = {int(p) for p in eng_last.loc[eng_last["in_investable"].astype(bool), "permno"]}      # universe retention: last month's investable stocks that must still have a row
     files = fund_files(through_month)
-    for key in files:
-        path = ciq_dir / f"capiq_fund_{key}_2026.xlsx"
+    read: list[Path] = [est_path(ciq_dir, m) for m in months_between(EST_FIRST, through_month) if est_path(ciq_dir, m).exists()] if estimates else []
+    for fm in files:
+        key, path = month_key(fm, fund=True), fund_path(ciq_dir, fm)
+        read.append(path)
         cm = load_month(path)                                  # raises CiqFormatError on the old or a broken format
         decision = first_of_next_month(cm.pricing_date)
         engine_case = decision <= last_engine_month
@@ -531,7 +552,7 @@ def run(base: Path, ciq_dir: Path, out: Path, last_engine_month: pd.Timestamp, p
                 "late_filings": int(t.loc[has_cap, "late_filing"].sum()), "state_month": str(st_month.date())}
         gates[f"match_{key}"] = "pass" if rate >= MIN_MATCH else "fail"
         fu = pd.concat([t[["permno", "mcap"]], feats], axis=1).dropna(subset=["permno"]).sort_values("mcap", ascending=False).drop_duplicates("permno")
-        if key == files[0]:                                    # parity against the engine: same month if the engine has it, else the last engine month (one month apart)
+        if fm == files[0]:                                    # parity against the engine: same month if the engine has it, else the last engine month (one month apart)
             ref = src.engine(decision, PANEL_COLS) if engine_case else eng_last
             both = ref[["permno", "in_investable"] + FEATURES].merge(fu[["permno"] + FEATURES], on="permno", suffixes=("", "_ciq"))
             par = {c: (round(float(spearmanr(*both[[c, c + "_ciq"]].dropna().values.T)[0]), 4) if both[[c, c + "_ciq"]].dropna().shape[0] > 30 else None) for c in FEATURES}
@@ -568,7 +589,7 @@ def run(base: Path, ciq_dir: Path, out: Path, last_engine_month: pd.Timestamp, p
     rep = out / "CIQ_FILL_REPORT.json"
     rep.write_bytes((json.dumps(report, indent=1, sort_keys=True) + "\n").encode("utf-8"))
     inputs = {**({"yahoo_files_digest": yahoo_digest} if yahoo_digest else {}), **({"sec_live_events": sha256_file(sec_live)} if sec_live is not None and sec_live.exists() else {}), "base_panel": sha256_file(Path(src.panel)),
-              **{p.name: sha256_file(p) for p in sorted([*ciq_dir.glob("capiq_fund_*_2026.xlsx"), *(ciq_dir.glob("capiq_est_*_2026.xlsx") if estimates else [])])}}
+              **{p.name: sha256_file(p) for p in sorted(read)}}
     write_release(out, out.name, "Master panel: engine panel + Capital IQ fundamentals (fill and bridge rows)", inputs=inputs,
                   validation={"report_sha256": sha256_file(rep), "gates": gates}, expected={"rows": report["rows"]}, allow_dirty_code=allow_dirty_code)
     return report

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import gzip
+import json
 
 import numpy as np
 import pandas as pd
@@ -56,3 +57,10 @@ def test_parity_rule_handles_near_constant_features_and_low_coverage():
     built["2026-05"]["ret_3m"] = -eng["2026-05"]["ret_3m"]                            # reversed ranks: correlation -1
     r = yp.parity(built, eng)
     assert not r["zero_vol_frac_1m"]["pass"] and not r["vol_1m"]["pass"] and not r["ret_3m"]["pass"] and r["vol_1m"]["coverage_of_engine_rows"] == pytest.approx(0.5)
+
+
+def test_last_close_is_missing_for_an_empty_response_without_quotes_or_timestamps(tmp_path):
+    with gzip.open(tmp_path / "82279.json.gz", "wt") as f:
+        json.dump({"chart": {"result": [{"meta": {}, "indicators": {"quote": [{}]}}]}}, f)          # Yahoo's reply for a name with no data
+    px, day = yp.last_close(82279, tmp_path)
+    assert np.isnan(px) and day is None

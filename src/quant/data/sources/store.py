@@ -1,7 +1,7 @@
 """Where pulled data is kept, and how it is read back point in time.
 
-    record/data/sources/<name>/<pull date>/data.parquet       one file per pull (git-ignored, like all data)
-    record/data/sources/<name>/<pull date>/MANIFEST.json      the request, rows, date range, the file's sha256, the code commit
+    record/data/derived/sources/<name>/<pull date>/data.parquet       one file per pull (git-ignored, like all data)
+    record/data/derived/sources/<name>/<pull date>/MANIFEST.json      the request, rows, date range, the file's sha256, the code commit
 
 A pull never overwrites an earlier one: a revised history arrives as a new pull, and `load` reads the newest pull unless told otherwise.
 """
@@ -18,7 +18,7 @@ from quant.core.paths import RECORD
 from quant.core.release.release import sha256_file
 from quant.data.sources.base import DataSource, PullRequest, conform, validate
 
-ROOT = RECORD / "data" / "sources"
+ROOT = RECORD / "data" / "derived" / "sources"
 
 
 class Refused(Exception):

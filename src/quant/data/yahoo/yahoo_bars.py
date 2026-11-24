@@ -1,6 +1,6 @@
 """Refresh the free Yahoo daily bars read by the bridge price features and the target book's prices (quant.features.ciqfill.yahoo_price): one chart file per permno.
 
-    tools/py -m quant.data.yahoo.yahoo_bars --to 2026-10-31 --out data/external/free_2026/yahoo_2026-10-31 [--from-dir data/external/free_2026/yahoo]
+    tools/py -m quant.data.yahoo.yahoo_bars --to 2026-10-31 --out data/raw/Yahoo/free_2026/yahoo_2026-10-31 [--from-dir data/raw/Yahoo/free_2026/yahoo]
 
 Each stock keeps the Yahoo symbol of its file in --from-dir (`meta.symbol`), so the refreshed set covers the same stocks under the same symbols as the bars the
 current release was built from; the bars run from START to --to (inclusive). A new folder is written and the old one is never touched: a release records the digest
@@ -67,8 +67,9 @@ def refresh(src: Path, out: Path, end: dt.date, pause: float = PAUSE) -> dict[st
     if out.resolve() == src.resolve():
         raise SystemExit("--out must be a new folder: the releases built from the source folder record its digest")
     out.mkdir(parents=True, exist_ok=True)
-    man_path = out / "MANIFEST.json"
-    man: dict[str, Any] = json.loads(man_path.read_text()) if man_path.exists() else {"source_symbols": str(src), "start": str(START), "end": str(end), "files": {}, "not_returned": {}}
+    man_path, partial = out / "MANIFEST.json", out / "MANIFEST.partial.json"     # MANIFEST.json only once finished: readers take it as "complete"
+    known = partial if partial.exists() else man_path
+    man: dict[str, Any] = json.loads(known.read_text()) if known.exists() else {"source_symbols": str(src), "start": str(START), "end": str(end), "files": {}, "not_returned": {}}
     if man["end"] != str(end):
         raise SystemExit(f"{out} holds bars to {man['end']}, not {end}: use a new folder")
     for i, (permno, sym) in enumerate(symbols(src).items()):
@@ -83,8 +84,9 @@ def refresh(src: Path, out: Path, end: dt.date, pause: float = PAUSE) -> dict[st
             f.write_bytes(gzip.compress(body, mtime=0))
             man["files"][f.name] = {"url": url, "utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "sha256": hashlib.sha256(body).hexdigest()}
         if i % 200 == 0:
-            man_path.write_text(json.dumps(man, indent=1) + "\n")
+            partial.write_text(json.dumps(man, indent=1) + "\n")
     man_path.write_text(json.dumps(man, indent=1) + "\n")
+    partial.unlink(missing_ok=True)
     return man
 
 

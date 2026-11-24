@@ -204,13 +204,47 @@ def gross_after(plan: dict[str, Any], positions: dict[str, tuple[float, float | 
     return total
 
 
+def catch_up_siblings(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Amendment A30b: on a catch-up slot (schedule.CATCH_UP), the other plans of the same slot that were sent and have not settled (their orders are
+    still pending at the broker). Empty on any other slot."""
+    try:
+        slot = dt.date.fromisoformat(str(plan.get("slot")))
+    except ValueError:
+        return []
+    if slot not in SCH.CATCH_UP:
+        return []
+    recs = A.records()
+    slot_of = {r["plan_hash"]: r.get("slot") for r in recs if r["event"] == "plan"}
+    settled = {r["plan_hash"] for r in recs if r["event"] == "reconciled" and r.get("differences") == 0}
+    sent = {r["plan_hash"] for r in recs if r["event"] == "send_started"}
+    out = []
+    for h in sorted(sent - settled - {plan.get("plan_hash")}):
+        if slot_of.get(h) == str(slot) and (f := P.PLANS / f"{h}.json").exists():
+            out.append(json.loads(f.read_text()))
+    return out
+
+
+def merged_orders(plans: list[dict[str, Any]]) -> dict[str, Any]:
+    """One plan-shaped dict whose orders are the plans' orders summed by ticker (price per share from the first plan that trades it): the account after
+    all of them fill, for the gross check (A30b)."""
+    qty: dict[str, float] = {}
+    px: dict[str, float] = {}
+    for pl in plans:
+        for o in pl["orders"]:
+            qty[o["ticker"]] = qty.get(o["ticker"], 0.0) + o["quantity"]
+            px.setdefault(o["ticker"], o["usd"] / abs(o["quantity"]))
+    return {"orders": [{"ticker": t, "quantity": q, "usd": abs(q) * px[t]} for t, q in qty.items() if q]}
+
+
 def check_gross(plan: dict[str, Any], equity: float) -> None:
-    """Refuse a batch that would leave the whole account (all tranches, not just this plan) above MAX_GROSS x equity x (1 + MAX_GROSS_EXCESS) (amendment A17)."""
+    """Refuse a batch that would leave the whole account (all tranches, not just this plan) above MAX_GROSS x equity x (1 + MAX_GROSS_EXCESS) (amendment A17).
+    On a catch-up slot the pending orders of the slot's other sent plans count as filled (A30b)."""
     try:
         positions = ALP.position_values()
     except Exception as e:  # noqa: BLE001 - the exposure cannot be checked, so nothing is sent
         raise Refused(f"positions could not be read: {e!r}"[:200]) from e
-    gross, limit = gross_after(plan, positions), MAX_GROSS * equity * (1 + MAX_GROSS_EXCESS)
+    combined = merged_orders([plan, *catch_up_siblings(plan)])
+    gross, limit = gross_after(combined, positions), MAX_GROSS * equity * (1 + MAX_GROSS_EXCESS)
     if gross > limit:
         raise Refused(f"after this batch the account's gross exposure would be {gross:,.2f} USD, above {limit:,.2f} ({MAX_GROSS} x equity {equity:,.2f} x {1 + MAX_GROSS_EXCESS:g})")
 
@@ -250,7 +284,7 @@ def check_gates(plan: dict[str, Any], preflight_go: bool, now: dt.datetime | Non
         raise Refused(f"audit log chain broken at line(s) {chain['broken']}")
     if chain["anchor_problem"]:
         raise Refused(f"audit log: {chain['anchor_problem']}")
-    if plan_hash(orders, acct) != h:
+    if plan_hash(orders, acct, plan.get("tranche")) != h:
         raise Refused("plan changed since it was written")
     b = broker_of(plan)
     if b != SEND_BROKER:
@@ -335,10 +369,17 @@ def qty_text(q: float) -> str:
     return f"{abs(q):.{QTY_DECIMALS}f}".rstrip("0").rstrip(".")
 
 
+DAY_ORDERS = True                                           # amendment A31: one market day order per line; the paper account expired most opening-auction orders
+
+
 def alpaca_orders(o: dict[str, Any], h: str, i: int) -> list[dict[str, Any]]:
-    """The broker orders for one plan line (amendment A13): its whole shares as a market-on-open order (time in force `opg`, filled in the opening
-    auction), and any fractional remainder as a market day order (Alpaca accepts fractions only as day orders). Together they are exactly the line's quantity."""
+    """The broker orders for one plan line. Since amendment A31: one market day order for the whole quantity (fractions allowed on day orders).
+    Under A13 (DAY_ORDERS False): the whole shares as a market-on-open order (time in force `opg`, filled in the opening auction) and any fractional
+    remainder as a market day order. Either way they are exactly the line's quantity."""
     q = abs(o["quantity"])
+    if DAY_ORDERS:
+        return [{"symbol": o["ticker"], "qty": qty_text(q), "side": "buy" if o["quantity"] > 0 else "sell", "type": "market", "time_in_force": "day",
+                 "client_order_id": f"{h[:24]}-{i}"}]
     whole = math.floor(q + 10 ** -(QTY_DECIMALS + 2))
     frac = round(q - whole, QTY_DECIMALS)
     side = "buy" if o["quantity"] > 0 else "sell"
@@ -413,13 +454,14 @@ def _send(plan: dict[str, Any], preflight_go: bool, sleep: float) -> list[dict[s
             before = broker_positions(b)
         except Exception as e:  # noqa: BLE001 - without the positions before the batch it cannot be reconciled, so it is not sent
             raise Refused(f"positions could not be read: {e!r}"[:200]) from e
-        if late := auction_window_problem(CLOCK()):
+        if not DAY_ORDERS and (late := auction_window_problem(CLOCK())):                 # A31: day orders may be sent while the market is open
             raise Refused(late)
         ledger_differs = ledger_vs_positions(before)
         if ledger_differs:
             raise Refused(f"the account's positions are not what the tranche ledger holds ({ledger_differs}): find the trade outside the engine, "
                           "then settle the ledger, before any new batch")
-        if others := foreign_open_orders():
+        sibling = tuple(pl["plan_hash"][:24] for pl in catch_up_siblings(plan))
+        if others := [o for o in foreign_open_orders() if not (sibling and o.startswith(sibling))]:      # A30b: a catch-up sibling's pending orders are expected
             raise Refused(f"{len(others)} order(s) are open at the broker ({', '.join(others[:5])}): a fill after the checks would change holdings and exposure; "
                           "cancel or wait for them, then send")
     except Refused as e:
@@ -545,6 +587,67 @@ def reconcile_sent(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return diffs
 
 
+def plan_fills(plan: dict[str, Any], orders: list[dict[str, Any]]) -> dict[str, float]:
+    """Signed filled quantity by symbol of the broker orders whose client order id carries this plan's prefix (amendment A31)."""
+    out: dict[str, float] = {}
+    for o in orders:
+        if str(o.get("client_order_id", "")).startswith(plan["plan_hash"][:24]) and float(o.get("filled_qty") or 0):
+            q = float(o["filled_qty"]) * (1 if o["side"] == "buy" else -1)
+            out[o["symbol"]] = round(out.get(o["symbol"], 0.0) + q, QTY_DECIMALS)
+    return out
+
+
+def settle_from_fills(plans: list[dict[str, Any]], orders: list[dict[str, Any]], positions: dict[str, float]) -> dict[int, dict[str, float]]:
+    """Amendment A31: each sent plan's tranche holds what it held before its batch plus its own orders' filled quantities. Returned only when the whole
+    ledger after that (these tranches settled, every other tranche as recorded) equals the broker's positions symbol by symbol; otherwise Refused."""
+    ledger = LG.load()
+    new = {int(pl["tranche"]): dict(LG.tranche(ledger, int(pl["tranche"]))) for pl in plans}
+    for pl in plans:
+        if LG.tranche(ledger, int(pl["tranche"])) != pl.get("held", {}):
+            raise Refused(f"tranche {pl['tranche']}'s ledger is not what plan {pl['plan_hash'][:12]} started from")
+        for sym, q in plan_fills(pl, orders).items():
+            new[int(pl["tranche"])][sym] = round(new[int(pl["tranche"])].get(sym, 0.0) + q, QTY_DECIMALS)
+    total: dict[str, float] = {}
+    for i in range(SCH.K_TRANCHES):
+        for sym, q in (new[i] if i in new else LG.tranche(ledger, i)).items():
+            total[sym] = total.get(sym, 0.0) + q
+    syms = {k for k, v in total.items() if abs(v) > 1e-6} | {k for k, v in positions.items() if abs(v) > 1e-6}
+    if bad := sorted(k for k in syms if abs(total.get(k, 0.0) - positions.get(k, 0.0)) > 10 ** -QTY_DECIMALS):
+        raise Refused(f"the tranches settled from fills do not add up to the broker's positions: {bad[:8]}")
+    return new
+
+
+def broker_orders_since(utc: str) -> list[dict[str, Any]]:
+    """Every Alpaca order submitted after `utc` (paged, 500 at a time)."""
+    out: dict[str, dict[str, Any]] = {}
+    after = utc.replace("+00:00", "Z")                         # a "+" in the query string reads as a space: Alpaca answers 422
+    while True:
+        page: list[dict[str, Any]] = ALP.get(f"/v2/orders?status=all&after={after}&limit=500&direction=asc")
+        out.update({o["id"]: o for o in page})
+        if len(page) < 500:
+            return list(out.values())
+        after = page[-1]["submitted_at"]
+
+
+def settle_fills_cmd(paths: list[str]) -> int:
+    plans = [json.loads(Path(f).read_text()) for f in paths]
+    for pl in plans:
+        past = history(pl["plan_hash"])
+        if not any(r["event"] == "send_finished" for r in past):
+            raise Refused(f"plan {pl['plan_hash'][:12]} has no finished send")
+        if open_plan_orders(pl):
+            raise Refused(f"orders of plan {pl['plan_hash'][:12]} are still open: settle after they fill or expire")
+    first = min(r["utc"] for pl in plans for r in history(pl["plan_hash"]) if r["event"] == "send_started")
+    new = settle_from_fills(plans, broker_orders_since(first), broker_positions(BROKER))
+    for pl in plans:
+        i = int(pl["tranche"])
+        LG.record_batch(LG.load(), i, new[i])                 # the ledger first, as in reconcile_sent
+        A.log("ledger_updated", plan_hash=pl["plan_hash"], tranche=i, lines=sum(1 for q in new[i].values() if q), basis="broker fills (A31)")
+        A.log("reconciled", plan_hash=pl["plan_hash"], differences=0, basis="broker fills (A31)")
+    print(json.dumps({str(i): len(h) for i, h in new.items()}))
+    return 0
+
+
 def preflight_go(cmd: list[str] = PREFLIGHT[0], result: Path = PREFLIGHT[1]) -> bool:
     """Run the read-only preflight now. GO only if this run exited 0 (it exits 1 on NO-GO and on a crash) and its result file says GO for today."""
     rc = subprocess.run(cmd, cwd=REPO, check=False, capture_output=True).returncode
@@ -560,22 +663,34 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--account-usd", type=float, required=True)
     p.add_argument("--exposure", type=float, default=None, help="overlay exposure; default: the one the target book recorded")
     p.add_argument("--slot", required=True, help="the Tuesday, YYYY-MM-DD")
+    p.add_argument("--tranche", type=int, default=None, help="another tranche than the slot's own; only where schedule.CATCH_UP lists it (amendment A30)")
     for c in ("send", "reconcile"):
         sub.add_parser(c).add_argument("plan")
+    sub.add_parser("settle-fills", help="amendment A31: settle sent plans' tranches from their orders' fills").add_argument("plans", nargs="+")
     sub.add_parser("verify-audit")
     a = ap.parse_args(argv)
     if a.cmd == "plan":
         slot = dt.date.fromisoformat(a.slot)
-        i = SCH.tranche_of(slot)
+        i = SCH.tranche_of(slot) if a.tranche is None else a.tranche
+        if not SCH.plannable(slot, i):
+            print(f"REFUSED: tranche {i} is not planned on the slot of {slot} (its tranche is {SCH.tranche_of(slot)}; no amendment lists a catch-up)")
+            return 1
         if u := unsettled(i):
             print(f"REFUSED: tranche {i}'s last batch (plan {u[:12]}) has not reconciled with zero differences: reconcile it first")
             return 1
         exposure = a.exposure if a.exposure is not None else book_exposure(Path(a.target))
-        plan = plan_from_target(Path(a.target), a.account_usd, exposure, slot, held=LG.tranche(LG.load(), i))
+        plan = plan_from_target(Path(a.target), a.account_usd, exposure, slot, held=LG.tranche(LG.load(), i), tranche=i)
         plan.update({"held_source": f"ledger, tranche {i}", "exposure_source": "given" if a.exposure is not None else "target book overlay state"})
         f = write_plan(plan)
         print(json.dumps({k: v for k, v in plan.items() if k not in ("orders", "skipped")}, indent=1), "\n", f)
         return 0
+    if a.cmd == "settle-fills":
+        try:
+            return settle_fills_cmd(a.plans)
+        except Refused as e:
+            A.log("refused", reason=f"settle-fills: {e}")
+            print(f"REFUSED: {e}")
+            return 1
     if a.cmd == "verify-audit":
         r = A.verify()
         print(json.dumps(r, indent=1))

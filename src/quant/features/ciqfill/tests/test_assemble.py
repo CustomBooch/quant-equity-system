@@ -203,3 +203,24 @@ def test_seal_leaks_counts_outcomes_after_their_seal_and_unset_incomplete_flags_
     assert values == {"fwd_ret_1m": 1, "fwd_ret_3m": 0}                         # 1m is sealed from 2026-01 (one value there), 3m from 2025-11
     assert flags == {"fwd_incomplete_1m": 1, "fwd_incomplete_3m": 0}            # a missing flag after the seal is not TRUE
     assert seal_leaks(con, "d", {"month", "fwd_ret_3m"}) == ({"fwd_ret_3m": 0}, {})
+
+
+def test_month_keys_keep_the_2026_gate_names_and_add_the_year_after_2026(tmp_path):
+    from quant.features.ciqfill import assemble as A
+    assert A.month_key(pd.Timestamp("2026-11-01")) == "nov" and A.month_key(pd.Timestamp("2026-07-01"), fund=True) == "july"
+    assert A.month_key(pd.Timestamp("2027-01-01")) == "jan_2027" and A.month_key(pd.Timestamp("2027-07-01"), fund=True) == "july_2027"
+    assert A.fund_path(tmp_path, pd.Timestamp("2027-01-01")).name == "capiq_fund_jan_2027.xlsx"
+    assert A.est_path(tmp_path, pd.Timestamp("2027-02-01")).name == "capiq_est_feb_2027.xlsx"
+    assert [m.strftime("%Y-%m") for m in A.fund_files(pd.Timestamp("2027-02-01"))] == ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12", "2027-01", "2027-02"]
+
+
+def test_estimates_load_across_the_year_end_and_refuse_a_wrongly_dated_2027_file(tmp_path):
+    from quant.features.ciqfill import assemble as A
+    months = pd.date_range("2026-04-01", "2027-01-01", freq="MS")
+    for i, m in enumerate(months):
+        make_est_file(A.est_path(tmp_path, m), est_rows(20, i, m.date().isoformat()), asof=m.strftime("%m/%d/%Y"))
+    est = A.load_estimates(tmp_path, pd.Timestamp("2027-01-01"))
+    assert set(est) == {A.month_key(m) for m in months} and est["jan_2027"].asof == pd.Timestamp("2027-01-01")
+    make_est_file(A.est_path(tmp_path, pd.Timestamp("2027-01-01")), est_rows(20, 9, "2026-12-01"), asof="12/01/2026")
+    with pytest.raises(SystemExit, match="capiq_est_jan_2027.xlsx is as of 2026-12-01"):
+        A.load_estimates(tmp_path, pd.Timestamp("2027-01-01"))

@@ -22,8 +22,13 @@ PLANS = ROOT / "plans"
 MIN_ORDER_USD, QTY_DECIMALS = 5.0, 4                        # SPEC section 4: skip orders below USD 5; whole or four-decimal fractional quantities
 
 
-def plan_hash(orders: list[dict[str, Any]], account_value_usd: float) -> str:
-    return hashlib.sha256(json.dumps({"orders": orders, "account_value_usd": round(account_value_usd, 2)}, sort_keys=True).encode()).hexdigest()
+def plan_hash(orders: list[dict[str, Any]], account_value_usd: float, tranche: int | None = None) -> str:
+    """SHA-256 of the orders and account value, plus the tranche when the plan names one (to-do F6): two tranches with the same orders get distinct
+    hashes. A plan without a tranche hashes as before, so the frozen reference's fixtures still agree."""
+    payload: dict[str, Any] = {"orders": orders, "account_value_usd": round(account_value_usd, 2)}
+    if tranche is not None:
+        payload["tranche"] = tranche
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def plan_seal(plan: dict[str, Any]) -> str:
@@ -74,10 +79,12 @@ def latest_prices(tickers: list[str]) -> tuple[dict[str, float], str]:
     return {t: float(v) for t, v in last.items() if v == v and v > 0}, str(px.index[-1].date())
 
 
-def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float, slot: dt.date, held: dict[str, float] | None = None) -> dict[str, Any]:
+def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float, slot: dt.date, held: dict[str, float] | None = None,
+                     tranche: int | None = None) -> dict[str, Any]:
     """Plan for one Tuesday slot from a target book (quant.portfolio.targets): that slot's tranche (1/K of the account times the overlay exposure) moves from `held` to the book.
     `held` is the tranche's current shares by Alpaca symbol (the engine passes the tranche ledger's); None means an empty tranche. The plan records it, so that a
-    clean reconciliation can record the tranche's new holdings (held plus the orders the broker accepted)."""
+    clean reconciliation can record the tranche's new holdings (held plus the orders the broker accepted). `tranche` defaults to the slot's own; another one
+    is accepted only where schedule.CATCH_UP lists it for that slot (A30)."""
     import pandas as pd
 
     from quant.portfolio import schedule as SCH
@@ -98,11 +105,20 @@ def plan_from_target(target_csv: Path, account_value_usd: float, exposure: float
     weights = dict(zip(b[col], b["w"] / b["w"].sum() * lev, strict=True))          # A11 books: longs 1 + s, shorts -s, total 1; A12 scales both by k (total k)
     target = SCH.tranche_target_shares(weights, prices, account_value_usd, exposure)
     target = {t: (float(math.trunc(v)) if weights[t] < 0 else v) for t, v in target.items()}   # whole-share shorts, toward zero (A11)
+    flipped = sorted(t for t, v in target.items() if v < 0 and (held or {}).get(t, 0.0) > 0)
+    target.update(dict.fromkeys(flipped, 0.0))                      # A25: a long the book now shorts is closed this slot; a fractional long cannot be sold into a whole-share short
     plan = make_plan(target, held or {}, prices, account_value_usd)
+    if flipped:
+        plan["short_deferred"] = flipped
     if short_fraction:
         plan["short_fraction"] = short_fraction
     if lev != 1.0:
         plan["leverage"] = lev
-    plan.update({"broker": "alpaca", "decision_month": meta.get("decision_month"), "slot": str(slot), "tranche": SCH.tranche_of(slot), "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
+    if tranche is None:
+        tranche = SCH.tranche_of(slot)
+    if not SCH.plannable(slot, tranche):
+        raise ValueError(f"tranche {tranche} cannot be planned on the slot of {slot} (its tranche is {SCH.tranche_of(slot)}; no amendment lists a catch-up)")
+    plan.update({"broker": "alpaca", "decision_month": meta.get("decision_month"), "slot": str(slot), "tranche": tranche, "k": SCH.K_TRANCHES, "exposure": exposure, "target_book": str(target_csv), "price_date": px_date,
                  "held": dict(held or {}), "held_source": "assumed empty (account not read)" if held is None else "given", "usd_total": round(sum(o["usd"] for o in plan["orders"]), 2)})
+    plan["plan_hash"] = plan_hash(plan["orders"], account_value_usd, tranche)
     return plan

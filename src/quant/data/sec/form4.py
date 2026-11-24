@@ -4,7 +4,7 @@
     dotenvx run -- python -m quant.data.sec.form4 pull    # original Form 4s filed 2026-10-01..30 for CIKs the build links -> form4_tx.parquet, form4_owners.parquet
 
 Kept per filing: documentType (only "4" is used), the issuer CIK, every reporting owner's CIK, and each non-derivative transaction's code, shares and price per share (codes P and
-S are the ones the engine counts). The quarterly data set is not out for 2026q4 until January, so October's filings are read one by one. Files go to data/raw_ext/<SEC_PULL_DIR>
+S are the ones the engine counts). The quarterly data set is not out for 2026q4 until January, so October's filings are read one by one. Files go to data/raw/SEC/<SEC_PULL_DIR>
 (default sec_fill_2026-11-16). Resumable: each batch read is kept under parts/ and never fetched again; a failed request is recorded, never retried in a loop. The contact comes
 from SEC_CONTACT (run under dotenvx) and is never written anywhere; 0.4 s between requests.
 """
@@ -28,9 +28,9 @@ import pandas as pd
 from quant.core.paths import REPO
 from quant.data.sec import sec_pull
 
-OUT = REPO / "data/raw_ext" / os.environ.get("SEC_PULL_DIR", "sec_fill_2026-11-16")
-DATASET = REPO / "data/raw_ext/six_2026-10-13/sec_insider/2026q3.zip"
-TABLES = REPO / "panel/_build/ext_2026-10-22a/build/tables"
+OUT = REPO / "data/raw/SEC" / os.environ.get("SEC_PULL_DIR", "sec_fill_2026-11-16")
+DATASET = REPO / "data/raw/SEC/sec_insider/2026q3.zip"
+TABLES = REPO / "data/derived/builds/ext_2026-10-22a/build/tables"
 CHECK_N, CHECK_SEED = 1000, 20261116
 CHECK_FROM, CHECK_TO = pd.Timestamp("2026-09-01"), pd.Timestamp("2026-09-30")
 PULL_FROM, PULL_TO = pd.Timestamp("2026-10-01"), pd.Timestamp("2026-10-30")
