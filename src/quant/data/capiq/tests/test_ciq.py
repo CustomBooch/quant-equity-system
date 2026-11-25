@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant.data.capiq.ciq import CiqFormatError, load_month
+from quant.data.capiq.ciq import CiqFormatError, load_month, numeric
 from quant.features.ciqfill.tests.factories import MNEM, SERIAL, company_rows, header, make_file, write_xlsx
 
 
@@ -50,3 +50,11 @@ def test_a_fundamentals_as_of_cell_that_cannot_be_read_is_refused_as_a_format_er
     write_xlsx(tmp_path / "a.xlsx", h + company_rows(3))
     with pytest.raises(CiqFormatError, match=r"fundamentals as-of \['2026-07-01', 'unreadable'\]"):      # was a TypeError from sorting None with dates
         load_month(tmp_path / "a.xlsx")
+
+
+def test_cell_texts_parse_to_the_nearest_double_and_tokens_or_cusip_like_text_become_nan():
+    texts = pd.Series(["0.1234567890123456789", "-2.5E-3", "NM", "46120E602", "abc", None, "12"])
+    got = numeric(texts)
+    assert got.dtype == "float64" and got.index.equals(texts.index)
+    assert got.iloc[0] == float("0.1234567890123456789") and got.iloc[1] == -0.0025 and got.iloc[6] == 12.0     # Python's correctly rounded value
+    assert got.iloc[[2, 3, 4, 5]].isna().all()                                       # not-available token, CUSIP read as an infinite number, text, empty

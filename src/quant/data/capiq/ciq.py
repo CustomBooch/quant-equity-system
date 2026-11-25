@@ -9,6 +9,7 @@ Units are converted to dollars: fundamentals are $000 in the export, market capi
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,9 +80,21 @@ def screening_sheet(path: str | Path) -> tuple[Rows, int]:
     return rows, r0
 
 
+def _number(v: object) -> float:
+    if isinstance(v, bool) or v is None:
+        return math.nan
+    try:
+        x = float(v)                                  # type: ignore[arg-type]  # correctly rounded, the same on every pandas version
+    except (TypeError, ValueError):
+        return math.nan
+    return x if math.isfinite(x) else math.nan
+
+
 def numeric(col: pd.Series) -> pd.Series:
-    """Cell texts as numbers: Capital IQ's not-available tokens (NA_TOKENS) and any other text that is not a number become NaN."""
-    return pd.to_numeric(col.where(~col.isin(NA_TOKENS)), errors="coerce")
+    """Cell texts as numbers: Capital IQ's not-available tokens (NA_TOKENS), any other text that is not a number, and text that reads as an infinite
+    number (a CUSIP such as 46120E602) become NaN. Parsed with Python's float(), which rounds to the nearest double: pandas 2's to_numeric did not
+    (up to ~5e-13 relative), and pandas 3's does, so float() keeps the inputs identical across versions (to-do D1)."""
+    return pd.Series([_number(v) for v in col.where(~col.isin(NA_TOKENS))], index=col.index, dtype="float64")
 
 
 def text(col: pd.Series) -> pd.Series:

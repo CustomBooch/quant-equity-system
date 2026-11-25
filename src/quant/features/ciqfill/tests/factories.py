@@ -219,8 +219,10 @@ def build_base(root: Path, n=60, last_engine="2026-06-01", realistic=True, yahoo
         fq = pd.concat([pd.DataFrame({"gvkey": [f"G{i:05d}" for i in range(n)], "rdq": [pd.Timestamp(d0) + pd.Timedelta(days=i % 5) for i in range(n)]})
                         for d0 in ("2025-11-14", "2026-02-12", "2026-05-12", "2026-08-12")], ignore_index=True)
         fq["datadate"] = fq["rdq"]
-        for c in ef.COLS + ef.KD_COLS:
+        for c in ef.COLS:
             df[c] = np.nan
+        for c in ef.KD_COLS:
+            df[c] = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")     # dates, not floats: pandas 3 refuses dates into a float column
         for m in months:
             ev = fq.assign(permno=lambda d: [100 + int(g[1:]) for g in d["gvkey"]]).rename(columns={"rdq": "event_date"})[["permno", "event_date"]]
             ev = ev[ev["event_date"] < pd.Timestamp(m)]

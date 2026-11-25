@@ -76,7 +76,7 @@ def load_bridge(path: str | Path, fy1_by_cusip8: pd.Series | None = None) -> Bri
         df[k] = numeric(df[k])
     df["cusip8"] = cusip8(df["cusip9"])
     if from_est and fy1_by_cusip8 is not None:
-        df[FY1] = df["cusip8"].map(fy1_by_cusip8[~fy1_by_cusip8.index.duplicated()])
+        df[FY1] = df["cusip8"].map(fy1_by_cusip8[~fy1_by_cusip8.index.duplicated()]).to_numpy(dtype="float64", na_value=np.nan)   # plain floats, NaN when unmatched (pandas 3 maps to NA)
     return BridgeFile(a, df, str(path))
 
 
