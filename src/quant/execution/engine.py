@@ -149,7 +149,7 @@ def unsettled(tranche: int) -> str | None:
 
 def sealed_unchanged(plan: dict[str, Any], record: dict[str, Any]) -> None:
     """Refuse a plan whose file no longer matches the digest recorded when it was written (amendment A15). The plan hash, which the owner's token
-    confirms and rust_core re-derives, covers only the orders and the account value; the tranche, the holdings, the leverage and every other field
+    confirms and rust_core re-derives, covers the orders, the account value and the tranche (A32); the holdings, the leverage and every other field
     are held by this digest."""
     if "plan_sha256" not in record:
         raise Refused("the plan was recorded without a digest of its file (before amendment A15): make a new plan")
@@ -635,6 +635,9 @@ def settle_fills_cmd(paths: list[str]) -> int:
         past = history(pl["plan_hash"])
         if not any(r["event"] == "send_finished" for r in past):
             raise Refused(f"plan {pl['plan_hash'][:12]} has no finished send")
+        if not (made := [r for r in past if r["event"] == "plan"]):
+            raise Refused(f"no plan record for plan {pl['plan_hash'][:12]} in the audit log")
+        sealed_unchanged(pl, made[0])                                     # as reconcile_sent: the tranche and holdings settled are those recorded
         if open_plan_orders(pl):
             raise Refused(f"orders of plan {pl['plan_hash'][:12]} are still open: settle after they fill or expire")
     first = min(r["utc"] for pl in plans for r in history(pl["plan_hash"]) if r["event"] == "send_started")

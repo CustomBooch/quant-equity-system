@@ -81,7 +81,8 @@ pub fn is_slot(y: i64, m: i64, d: i64) -> bool {
     weekday(y, m, d) == WEEKDAY
 }
 
-/// Tranche rebuilt on a slot day (ISO week number modulo k). Errors when the day is not a Tuesday.
+/// Tranche rebuilt on a slot day: a continuous week count modulo k (A33), as Python's `(date.toordinal() // 7 + 2) % k`
+/// (toordinal = days since 1970-01-01 + 719163). Errors when the day is not a Tuesday.
 pub fn tranche_of(y: i64, m: i64, d: i64, k: i64) -> Result<i64, String> {
     if !is_slot(y, m, d) {
         return Err(format!("{y:04}-{m:02}-{d:02} is not a Tuesday slot"));
@@ -89,7 +90,7 @@ pub fn tranche_of(y: i64, m: i64, d: i64, k: i64) -> Result<i64, String> {
     if k < 1 {
         return Err("k must be at least 1".into());
     }
-    Ok(iso_week(y, m, d).rem_euclid(k))
+    Ok(((days_from_civil(y, m, d) + 719_163).div_euclid(7) + 2).rem_euclid(k))
 }
 
 /// Trend overlay exposure. Fails closed on non-finite inputs.

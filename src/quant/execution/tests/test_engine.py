@@ -867,3 +867,15 @@ class TestDayOrders:
             E.settle_from_fills([a, b], orders, {**t0, "AAA": 3.0, "OLD": 7.0})
         with pytest.raises(E.Refused, match="ledger is not what plan"):
             E.settle_from_fills([{**b, "held": {}}], orders, {**t0, "OLD": 6.0})
+
+    def test_settling_from_fills_refuses_a_plan_file_changed_after_it_was_recorded(self, tmp_path):
+        p = ready()
+        A.log("send_started", plan_hash=p["plan_hash"], held_before={}, broker="alpaca")
+        A.log("send_finished", plan_hash=p["plan_hash"])
+        LG.record_batch(LG.load(), 2, {"BBB": 4.0})                                       # tranche 2 holds what the plan started from, so only the seal can tell
+        f = tmp_path / "edited.json"
+        f.write_text(json.dumps({**p, "tranche": 2}))
+        before = LG.load()
+        with pytest.raises(E.Refused, match="plan file changed"):
+            E.settle_fills_cmd([str(f)])
+        assert LG.load() == before

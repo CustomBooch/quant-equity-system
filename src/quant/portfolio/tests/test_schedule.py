@@ -15,6 +15,15 @@ def test_only_tuesdays_are_slots_and_tranches_rotate_over_four_weeks():
         S.tranche_of(dt.date(2026, 10, 21))
 
 
+def test_the_rotation_keeps_every_2026_slot_and_does_not_repeat_across_a_53_week_year():
+    tue = dt.date(2026, 1, 6)
+    for i in range(51):                                                              # A33 keeps the A5 tranche of every slot through 2026-12-22
+        d = tue + dt.timedelta(weeks=i)
+        assert S.tranche_of(d) == d.isocalendar().week % 4
+    ids = [S.tranche_of(dt.date(2026, 12, 22) + dt.timedelta(weeks=i)) for i in range(5)]
+    assert ids == [0, 1, 2, 3, 0]                                                    # ISO weeks 52, 53, 1, 2, 3 would give 0, 1, 1, 2, 3
+
+
 def test_overlay_exposure_is_the_defensive_level_below_trend_and_full_otherwise():
     assert S.overlay_exposure(90.0, 100.0) == 0.5 and S.overlay_exposure(110.0, 100.0) == 1.0
     assert S.overlay_exposure(90.0, 100.0, level=0.75) == 0.75 and S.SHADOW_LEVELS == (0.75, 0.25)

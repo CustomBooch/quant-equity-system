@@ -23,7 +23,7 @@ from quant.portfolio.broker import BROKER, SHORTS, line_column
 from quant.portfolio.model import MODEL, leverage, long_policy, short_fraction
 
 RES = REPO / "lab/paper/results"
-POLICIES = {"vw90": {"entry": 0.90, "exit": 0.70, "cap": 0.10, "sizing": "vw"}, "example": long_policy()}          # example = the model's long book (quant.portfolio.model; SPEC A2/A3); vw90 is the v1 book, kept for the record
+POLICIES = {"example": long_policy()}          # example = the model's long book (quant.portfolio.model; SPEC A2/A3)
 PRIMARY = "example"
 
 
@@ -61,7 +61,7 @@ def scores_master() -> tuple[pd.DataFrame, str, str]:
     month, f = found
     s = pd.read_parquet(f).set_index("permno")
     bars = latest_yahoo_bars(YAHOO_DAILY.parent) or YAHOO_DAILY
-    px = {int(p): last_close(int(p), bars)[0] for p in s.index[s["q"] > min(v["entry"] for v in POLICIES.values())]}
+    px = {int(p): last_close(int(p), bars)[0] for p in s.index[s["q"] > min(v["exit"] for v in POLICIES.values())]}   # every name a book could hold
     d = pd.DataFrame({"score": s["score"], "mcap": s["me_lag"], "px": pd.Series(px).reindex(s.index).fillna(s["price_lag"].abs())})
     return d, f"scores {f.name}", month[:7]
 

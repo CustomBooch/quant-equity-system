@@ -104,7 +104,7 @@ fn calendar_and_tranches_match_python_for_22_years() {
         assert_eq!(is_slot(y, m, d), matches!(r.get("slot"), Some(Value::Bool(true))));
         if is_slot(y, m, d) {
             slots += 1;
-            assert_eq!(tranche_of(y, m, d, K_TRANCHES).unwrap() as f64, r.get("tranche").unwrap().as_f64().unwrap());
+            assert_eq!(tranche_of(y, m, d, K_TRANCHES).unwrap() as f64, r.get("tranche_a33").unwrap().as_f64().unwrap(), "{y}-{m}-{d}");
         } else {
             assert!(tranche_of(y, m, d, K_TRANCHES).is_err());
         }
